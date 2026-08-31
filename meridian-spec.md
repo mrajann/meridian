@@ -1,7 +1,7 @@
 # Meridian — Incident Response Copilot
 ## Technical specification
 
-**Owner:** Murali Rajann
+**Owner:** MR
 **Purpose:** Portfolio project demonstrating production-grade RAG, agentic retrieval, tool calling, multi-agent orchestration, and evaluation.
 **Build method:** incremental, in Claude Code, one branch and one pull request per increment.
 
