@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Secrets
+.env
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Data artifacts (corpus, vector store — generated, not committed)
+data/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
