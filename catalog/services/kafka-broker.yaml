@@ -1,0 +1,11 @@
+name: kafka-broker
+tier: 2
+owner: data-platform
+oncall_rotation: data-oncall
+description: 'Event bus for async workflows: notifications, analytics, log shipping.'
+depends_on: []
+depended_on_by: [log-aggregator, metrics-collector, notification-service]
+slo: {availability: 99.9, latency_p99_ms: 100}
+runbooks: [kafka-broker-consumer-lag, kafka-broker-under-replicated]
+blast_radius: Async notifications and metrics/log pipelines fall behind or stop.
+business_hours_only: false

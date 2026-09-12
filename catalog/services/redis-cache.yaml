@@ -1,0 +1,12 @@
+name: redis-cache
+tier: 1
+owner: data-platform
+oncall_rotation: data-oncall
+description: Shared in-memory cache for sessions, pricing, and cart state.
+depends_on: []
+depended_on_by: [auth-service, cart-service, catalog-service, feature-flags, inventory-service, pricing-engine,
+  recommendation-engine, search-service, session-store]
+slo: {availability: 99.95, latency_p99_ms: 20}
+runbooks: [redis-cache-eviction, redis-cache-connection-refused]
+blast_radius: Elevated latency and error rates across most core-business services.
+business_hours_only: false

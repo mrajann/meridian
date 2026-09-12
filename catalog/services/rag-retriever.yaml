@@ -1,0 +1,11 @@
+name: rag-retriever
+tier: 2
+owner: ai-platform
+oncall_rotation: ai-oncall
+description: Vector retrieval over runbooks, postmortems, and support docs.
+depends_on: [llm-gateway, postgres-replica]
+depended_on_by: [chatbot-orchestrator]
+slo: {availability: 99.5, latency_p99_ms: 600}
+runbooks: [rag-retriever-empty-results, rag-retriever-5xx]
+blast_radius: Chatbot answers lose grounding and become less accurate. Chatbot stays up.
+business_hours_only: false

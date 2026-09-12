@@ -1,0 +1,11 @@
+name: analytics-api
+tier: 2
+owner: data-platform
+oncall_rotation: data-oncall
+description: Internal API serving dashboards and reporting off warehouse data.
+depends_on: [warehouse-etl, postgres-replica]
+depended_on_by: [recommendation-engine]
+slo: {availability: 99.0, latency_p99_ms: null}
+runbooks: [analytics-api-5xx]
+blast_radius: Internal dashboards unavailable or stale. No customer-facing impact.
+business_hours_only: true

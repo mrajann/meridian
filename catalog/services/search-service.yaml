@@ -1,0 +1,11 @@
+name: search-service
+tier: 2
+owner: growth-platform
+oncall_rotation: growth-oncall
+description: Full-text and faceted product search.
+depends_on: [postgres-replica, redis-cache]
+depended_on_by: [catalog-service, mobile-api, web-frontend]
+slo: {availability: 99.5, latency_p99_ms: 300}
+runbooks: [search-service-5xx, search-service-stale-index]
+blast_radius: Search returns no or stale results. Browsing by category still works.
+business_hours_only: false

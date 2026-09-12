@@ -1,0 +1,11 @@
+name: api-gateway
+tier: 1
+owner: edge-platform
+oncall_rotation: edge-oncall
+description: Ingress point for all external API traffic; auth enforcement, routing, rate limiting.
+depends_on: [auth-service, feature-flags]
+depended_on_by: [mobile-api, web-frontend]
+slo: {availability: 99.95, latency_p99_ms: 150}
+runbooks: [api-gateway-5xx, api-gateway-rate-limit-misconfig]
+blast_radius: All web and mobile traffic blocked. Complete customer-facing outage.
+business_hours_only: false

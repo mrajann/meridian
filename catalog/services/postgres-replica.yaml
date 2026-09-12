@@ -1,0 +1,11 @@
+name: postgres-replica
+tier: 2
+owner: data-platform
+oncall_rotation: data-oncall
+description: Read replica of postgres-primary, serving read-heavy and analytical queries.
+depends_on: [postgres-primary]
+depended_on_by: [analytics-api, rag-retriever, search-service, tracking-service, warehouse-etl]
+slo: {availability: 99.9, latency_p99_ms: 80}
+runbooks: [postgres-replica-lag, postgres-replica-5xx]
+blast_radius: Search, analytics, and RAG retrieval see stale or slow reads.
+business_hours_only: false

@@ -1,0 +1,11 @@
+name: mobile-api
+tier: 1
+owner: edge-platform
+oncall_rotation: edge-oncall
+description: Backend-for-frontend API consumed by the iOS and Android apps.
+depends_on: [api-gateway, checkout-api, cart-service, search-service, auth-service]
+depended_on_by: []
+slo: {availability: 99.9, latency_p99_ms: 400}
+runbooks: [mobile-api-5xx, mobile-api-latency]
+blast_radius: Mobile app customers cannot browse or check out. Web storefront unaffected.
+business_hours_only: false

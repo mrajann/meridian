@@ -1,0 +1,11 @@
+name: recommendation-engine
+tier: 2
+owner: growth-platform
+oncall_rotation: growth-oncall
+description: Personalized product recommendations for the storefront and app.
+depends_on: [llm-gateway, analytics-api, redis-cache]
+depended_on_by: []
+slo: {availability: 99.0, latency_p99_ms: 500}
+runbooks: [recommendation-engine-fallback]
+blast_radius: Recommendations fall back to generic best-sellers. No outage.
+business_hours_only: true

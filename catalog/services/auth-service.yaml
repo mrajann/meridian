@@ -1,0 +1,11 @@
+name: auth-service
+tier: 1
+owner: identity-platform
+oncall_rotation: identity-oncall
+description: Authentication and session token issuance for all customer and internal traffic.
+depends_on: [postgres-primary, redis-cache, secrets-manager]
+depended_on_by: [api-gateway, checkout-api, mobile-api, web-frontend]
+slo: {availability: 99.95, latency_p99_ms: 200}
+runbooks: [auth-service-5xx, auth-service-token-validation-failure]
+blast_radius: No one can log in. Cascades to every service behind api-gateway.
+business_hours_only: false

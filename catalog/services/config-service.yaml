@@ -1,0 +1,11 @@
+name: config-service
+tier: 2
+owner: platform-infra
+oncall_rotation: infra-oncall
+description: Centralized runtime configuration store for all services.
+depends_on: [postgres-primary]
+depended_on_by: [ci-pipeline]
+slo: {availability: 99.9, latency_p99_ms: 100}
+runbooks: [config-service-5xx]
+blast_radius: Services fall back to cached/default config; new config changes don't apply.
+business_hours_only: false

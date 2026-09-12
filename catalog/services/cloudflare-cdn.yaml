@@ -1,0 +1,11 @@
+name: cloudflare-cdn
+tier: external
+owner: external
+oncall_rotation: null
+description: CDN and edge network fronting all customer-facing traffic.
+depends_on: []
+depended_on_by: [cdn-config]
+slo: {availability: 99.99, latency_p99_ms: null}
+runbooks: [cdn-config-propagation-delay]
+blast_radius: Degraded or unreachable storefront for customers behind affected PoPs.
+business_hours_only: false

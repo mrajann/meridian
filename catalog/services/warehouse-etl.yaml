@@ -1,0 +1,11 @@
+name: warehouse-etl
+tier: 2
+owner: data-platform
+oncall_rotation: data-oncall
+description: Nightly batch jobs replicating operational data into the analytics warehouse.
+depends_on: [postgres-replica, s3-storage]
+depended_on_by: [analytics-api]
+slo: {availability: 99.0, latency_p99_ms: null}
+runbooks: [warehouse-etl-job-failure]
+blast_radius: Analytics and reporting data goes stale. No customer-facing impact.
+business_hours_only: true

@@ -1,0 +1,11 @@
+name: checkout-api
+tier: 1
+owner: payments-platform
+oncall_rotation: payments-oncall
+description: Order placement and payment capture. Revenue-critical path.
+depends_on: [auth-service, postgres-primary, stripe-gateway, inventory-service, pricing-engine]
+depended_on_by: [mobile-api, web-frontend]
+slo: {availability: 99.95, latency_p99_ms: 400}
+runbooks: [checkout-5xx, checkout-latency, checkout-stripe-timeout]
+blast_radius: All revenue. Complete outage means no orders can be placed.
+business_hours_only: false

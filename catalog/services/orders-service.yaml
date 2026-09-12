@@ -1,0 +1,11 @@
+name: orders-service
+tier: 1
+owner: commerce-platform
+oncall_rotation: commerce-oncall
+description: 'Order lifecycle management: creation, status transitions, cancellations.'
+depends_on: [postgres-primary, inventory-service, pricing-engine, notification-service]
+depended_on_by: [returns-service, shipping-service]
+slo: {availability: 99.9, latency_p99_ms: 350}
+runbooks: [orders-service-5xx, orders-service-stuck-state]
+blast_radius: Orders can be placed but status updates and cancellations fail.
+business_hours_only: false
