@@ -1,0 +1,11 @@
+name: metrics-collector
+tier: 3
+owner: platform-infra
+oncall_rotation: infra-oncall
+description: Collects and stores service-level metrics backing dashboards and alerts.
+depends_on: [kafka-broker]
+depended_on_by: []
+slo: {availability: 99.0, latency_p99_ms: null}
+runbooks: [metrics-collector-ingestion-lag]
+blast_radius: Metrics and alerting degrade; services keep serving traffic normally.
+business_hours_only: true

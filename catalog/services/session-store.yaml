@@ -1,0 +1,11 @@
+name: session-store
+tier: 1
+owner: identity-platform
+oncall_rotation: identity-oncall
+description: Distributed session state backing logged-in user sessions.
+depends_on: [redis-cache]
+depended_on_by: [user-profile]
+slo: {availability: 99.95, latency_p99_ms: 100}
+runbooks: [session-store-5xx, session-store-eviction-storm]
+blast_radius: Users get logged out unexpectedly; new logins may fail.
+business_hours_only: false

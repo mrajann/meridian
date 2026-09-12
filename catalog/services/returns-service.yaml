@@ -1,0 +1,11 @@
+name: returns-service
+tier: 2
+owner: fulfilment-platform
+oncall_rotation: fulfilment-oncall
+description: Handles return authorization, refund initiation, and restocking.
+depends_on: [orders-service, postgres-primary, notification-service]
+depended_on_by: []
+slo: {availability: 99.0, latency_p99_ms: 500}
+runbooks: [returns-service-5xx]
+blast_radius: Customers cannot initiate returns. No impact to ordering or shipping.
+business_hours_only: true

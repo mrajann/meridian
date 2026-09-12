@@ -1,0 +1,11 @@
+name: voicebot-asr
+tier: 2
+owner: ai-platform
+oncall_rotation: ai-oncall
+description: Speech-to-text transcription for the phone support voicebot.
+depends_on: [llm-gateway]
+depended_on_by: []
+slo: {availability: 99.0, latency_p99_ms: 1500}
+runbooks: [voicebot-asr-transcription-failure]
+blast_radius: Phone voicebot cannot understand callers; calls route to human agents.
+business_hours_only: true

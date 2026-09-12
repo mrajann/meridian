@@ -1,0 +1,11 @@
+name: chatbot-orchestrator
+tier: 2
+owner: ai-platform
+oncall_rotation: ai-oncall
+description: Drives the customer support chatbot's conversation and tool-use loop.
+depends_on: [llm-gateway, rag-retriever, user-profile]
+depended_on_by: []
+slo: {availability: 99.5, latency_p99_ms: 3000}
+runbooks: [chatbot-orchestrator-5xx]
+blast_radius: Support chatbot unavailable; customers fall back to human support.
+business_hours_only: false

@@ -1,0 +1,11 @@
+name: catalog-service
+tier: 1
+owner: commerce-platform
+oncall_rotation: commerce-oncall
+description: 'Product catalog: listings, categories, and product metadata.'
+depends_on: [postgres-primary, redis-cache, search-service]
+depended_on_by: [web-frontend]
+slo: {availability: 99.9, latency_p99_ms: 300}
+runbooks: [catalog-service-5xx, catalog-service-missing-products]
+blast_radius: Product pages fail to load or show missing/stale data.
+business_hours_only: false

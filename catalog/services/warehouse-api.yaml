@@ -1,0 +1,11 @@
+name: warehouse-api
+tier: 2
+owner: fulfilment-platform
+oncall_rotation: fulfilment-oncall
+description: Interface used by warehouse floor systems to pick, pack, and update stock.
+depends_on: [inventory-service, postgres-primary]
+depended_on_by: []
+slo: {availability: 99.5, latency_p99_ms: 400}
+runbooks: [warehouse-api-5xx]
+blast_radius: Warehouse staff cannot process picks/packs; fulfilment delays.
+business_hours_only: false

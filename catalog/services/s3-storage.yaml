@@ -1,0 +1,11 @@
+name: s3-storage
+tier: external
+owner: external
+oncall_rotation: null
+description: Object storage for product images, exports, and ETL staging data.
+depends_on: []
+depended_on_by: [log-aggregator, warehouse-etl]
+slo: {availability: 99.99, latency_p99_ms: null}
+runbooks: [s3-storage-access-denied]
+blast_radius: Image loads fail; ETL and log shipping jobs stall.
+business_hours_only: false

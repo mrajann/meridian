@@ -1,0 +1,11 @@
+name: log-aggregator
+tier: 3
+owner: platform-infra
+oncall_rotation: infra-oncall
+description: Centralized log collection and indexing for all services.
+depends_on: [kafka-broker, s3-storage]
+depended_on_by: []
+slo: {availability: 99.0, latency_p99_ms: null}
+runbooks: [log-aggregator-ingestion-lag]
+blast_radius: Logs delayed or missing. No impact to serving traffic; hurts debugging.
+business_hours_only: true

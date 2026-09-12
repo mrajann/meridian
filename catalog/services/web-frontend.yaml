@@ -1,0 +1,11 @@
+name: web-frontend
+tier: 1
+owner: edge-platform
+oncall_rotation: edge-oncall
+description: Server-rendered storefront web app; the primary customer-facing surface.
+depends_on: [api-gateway, checkout-api, catalog-service, cart-service, search-service, auth-service]
+depended_on_by: []
+slo: {availability: 99.9, latency_p99_ms: 500}
+runbooks: [web-frontend-5xx, web-frontend-slow-render]
+blast_radius: Customers cannot browse or check out on the website. Mobile app unaffected.
+business_hours_only: false

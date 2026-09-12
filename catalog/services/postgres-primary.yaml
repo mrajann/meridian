@@ -1,0 +1,12 @@
+name: postgres-primary
+tier: 1
+owner: data-platform
+oncall_rotation: data-oncall
+description: Primary relational datastore for orders, inventory, pricing, and auth.
+depends_on: []
+depended_on_by: [auth-service, catalog-service, checkout-api, config-service, inventory-service, orders-service,
+  postgres-replica, pricing-engine, returns-service, shipping-service, user-profile, warehouse-api]
+slo: {availability: 99.99, latency_p99_ms: 50}
+runbooks: [postgres-connection-pool, postgres-primary-failover, postgres-primary-disk-full]
+blast_radius: All revenue. Nearly every core-business and platform service reads or writes here.
+business_hours_only: false

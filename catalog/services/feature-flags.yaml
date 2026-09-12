@@ -1,0 +1,11 @@
+name: feature-flags
+tier: 2
+owner: platform-infra
+oncall_rotation: infra-oncall
+description: Feature flag evaluation service used for gradual rollouts and kill switches.
+depends_on: [redis-cache]
+depended_on_by: [api-gateway, llm-gateway]
+slo: {availability: 99.9, latency_p99_ms: 50}
+runbooks: [feature-flags-stale-cache, feature-flags-5xx]
+blast_radius: Flag evaluations fall back to defaults; rollouts and kill switches stop working.
+business_hours_only: false

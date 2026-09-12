@@ -1,0 +1,11 @@
+name: stripe-gateway
+tier: external
+owner: external
+oncall_rotation: null
+description: Payment processor integration for card capture and refunds.
+depends_on: []
+depended_on_by: [checkout-api]
+slo: {availability: 99.99, latency_p99_ms: null}
+runbooks: [checkout-stripe-timeout, stripe-gateway-webhook-failure]
+blast_radius: No payments can be captured anywhere in the platform.
+business_hours_only: false

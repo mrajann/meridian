@@ -1,0 +1,11 @@
+name: pricing-engine
+tier: 1
+owner: commerce-platform
+oncall_rotation: commerce-oncall
+description: Computes final price including discounts, promotions, and tax.
+depends_on: [postgres-primary, redis-cache]
+depended_on_by: [cart-service, checkout-api, orders-service]
+slo: {availability: 99.9, latency_p99_ms: 200}
+runbooks: [pricing-engine-5xx, pricing-engine-stale-cache]
+blast_radius: Checkout may show incorrect prices or fail to price the cart.
+business_hours_only: false

@@ -1,0 +1,11 @@
+name: cart-service
+tier: 1
+owner: commerce-platform
+oncall_rotation: commerce-oncall
+description: 'Shopping cart state: line items, quantities, applied promotions.'
+depends_on: [redis-cache, pricing-engine, inventory-service]
+depended_on_by: [mobile-api, web-frontend]
+slo: {availability: 99.9, latency_p99_ms: 200}
+runbooks: [cart-service-5xx, cart-service-lost-cart]
+blast_radius: Customers cannot add items to cart or see incorrect cart contents.
+business_hours_only: false

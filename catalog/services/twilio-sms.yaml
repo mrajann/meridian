@@ -1,0 +1,11 @@
+name: twilio-sms
+tier: external
+owner: external
+oncall_rotation: null
+description: SMS delivery provider for order and shipping notifications.
+depends_on: []
+depended_on_by: [notification-service, tracking-service]
+slo: {availability: 99.95, latency_p99_ms: null}
+runbooks: [notification-service-delivery-failure]
+blast_radius: SMS notifications fail to send. Email notifications unaffected.
+business_hours_only: false

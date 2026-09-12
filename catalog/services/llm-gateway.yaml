@@ -1,0 +1,11 @@
+name: llm-gateway
+tier: 2
+owner: ai-platform
+oncall_rotation: ai-oncall
+description: 'Internal proxy to external LLM providers: routing, key management, rate limiting.'
+depends_on: [secrets-manager, feature-flags]
+depended_on_by: [chatbot-orchestrator, rag-retriever, recommendation-engine, voicebot-asr]
+slo: {availability: 99.5, latency_p99_ms: 2000}
+runbooks: [llm-gateway-rate-limit, llm-gateway-timeout, llm-gateway-quality-degradation]
+blast_radius: All AI-layer features (chatbot, voicebot, recommendations, RAG) degrade or fail.
+business_hours_only: false

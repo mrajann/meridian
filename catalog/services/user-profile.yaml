@@ -1,0 +1,11 @@
+name: user-profile
+tier: 2
+owner: identity-platform
+oncall_rotation: identity-oncall
+description: 'Customer profile data: addresses, preferences, saved payment methods.'
+depends_on: [postgres-primary, session-store]
+depended_on_by: [chatbot-orchestrator]
+slo: {availability: 99.5, latency_p99_ms: 300}
+runbooks: [user-profile-5xx]
+blast_radius: Customers cannot view or edit profile/address data.
+business_hours_only: false

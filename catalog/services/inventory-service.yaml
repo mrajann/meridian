@@ -1,0 +1,11 @@
+name: inventory-service
+tier: 1
+owner: commerce-platform
+oncall_rotation: commerce-oncall
+description: Tracks stock levels and reservations across warehouses.
+depends_on: [postgres-primary, redis-cache]
+depended_on_by: [cart-service, checkout-api, orders-service, warehouse-api]
+slo: {availability: 99.9, latency_p99_ms: 250}
+runbooks: [inventory-service-5xx, inventory-service-oversell]
+blast_radius: Risk of overselling out-of-stock items; checkout may show stale availability.
+business_hours_only: false

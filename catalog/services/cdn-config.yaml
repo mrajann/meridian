@@ -1,0 +1,11 @@
+name: cdn-config
+tier: 1
+owner: edge-platform
+oncall_rotation: edge-oncall
+description: Manages CDN routing rules, cache invalidation, and edge redirects.
+depends_on: [cloudflare-cdn]
+depended_on_by: []
+slo: {availability: 99.9, latency_p99_ms: 200}
+runbooks: [cdn-config-propagation-delay, cdn-config-bad-rule]
+blast_radius: Stale or broken content served at the edge; asset load failures.
+business_hours_only: false

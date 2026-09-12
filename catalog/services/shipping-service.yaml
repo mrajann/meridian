@@ -1,0 +1,11 @@
+name: shipping-service
+tier: 2
+owner: fulfilment-platform
+oncall_rotation: fulfilment-oncall
+description: Generates shipping labels and selects carrier rates for orders.
+depends_on: [orders-service, tracking-service, postgres-primary]
+depended_on_by: []
+slo: {availability: 99.5, latency_p99_ms: 500}
+runbooks: [shipping-service-5xx, shipping-service-carrier-timeout]
+blast_radius: Orders cannot be dispatched for shipping. Order placement unaffected.
+business_hours_only: false

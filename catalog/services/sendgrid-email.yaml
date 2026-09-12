@@ -1,0 +1,11 @@
+name: sendgrid-email
+tier: external
+owner: external
+oncall_rotation: null
+description: Transactional and marketing email delivery provider.
+depends_on: []
+depended_on_by: [notification-service]
+slo: {availability: 99.9, latency_p99_ms: null}
+runbooks: [notification-service-delivery-failure]
+blast_radius: Email notifications fail to send. SMS notifications unaffected.
+business_hours_only: true

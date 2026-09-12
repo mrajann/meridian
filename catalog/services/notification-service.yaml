@@ -1,0 +1,11 @@
+name: notification-service
+tier: 2
+owner: growth-platform
+oncall_rotation: growth-oncall
+description: Dispatches order, shipping, and marketing notifications via SMS and email.
+depends_on: [twilio-sms, sendgrid-email, kafka-broker]
+depended_on_by: [orders-service, returns-service]
+slo: {availability: 99.5, latency_p99_ms: 800}
+runbooks: [notification-service-delivery-failure, notification-service-queue-backlog]
+blast_radius: Customers stop receiving order/shipping updates. Orders still process normally.
+business_hours_only: false
