@@ -1,7 +1,7 @@
 """Regenerate the corpus on disk: python -m meridian.corpus"""
 
 from meridian.catalog import load_catalog
-from meridian.corpus.generator import generate_corpus
+from meridian.corpus import generate_corpus
 from meridian.corpus.models import CORPUS_DIR, write_corpus
 
 

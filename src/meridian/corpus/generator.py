@@ -23,7 +23,13 @@ FRAGILE_SERVICES = {"postgres-primary", "llm-gateway", "notification-service"}
 # Services referenced by stale runbooks that no longer exist in the catalog --
 # used to build the "stale runbook" adversarial case and to assert, in tests,
 # that they really are absent from meridian.catalog.load_catalog().
-DECOMMISSIONED_SERVICES = ["checkout-monolith-v1", "varnish-cache-cluster"]
+DECOMMISSIONED_SERVICES = [
+    "checkout-monolith-v1",
+    "varnish-cache-cluster",
+    "legacy-recommendation-svc-v1",
+    "warehouse-mainframe-v1",
+    "sms-gateway-v1",
+]
 
 _CHECKOUT_5XX_INTRO = (
     "checkout-api is returning elevated 5xx rates or p99 latency above its "
