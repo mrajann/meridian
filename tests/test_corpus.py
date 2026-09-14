@@ -4,13 +4,8 @@ from collections import Counter
 import pytest
 
 from meridian.catalog import load_catalog
-from meridian.corpus import (
-    DECOMMISSIONED_SERVICES,
-    FRAGILE_SERVICES,
-    generate_corpus,
-    load_corpus,
-    write_corpus,
-)
+from meridian.corpus import DECOMMISSIONED_SERVICES, FRAGILE_SERVICES, load_corpus, write_corpus
+from meridian.corpus.generator import generate_corpus as generate_corpus_batch1
 from meridian.corpus.models import CorpusDocument
 
 
@@ -21,7 +16,10 @@ def catalog():
 
 @pytest.fixture(scope="module")
 def corpus(catalog):
-    return generate_corpus(catalog)
+    # Pinned to the original 32-document hand-authored batch specifically --
+    # see test_corpus_scale.py for the larger template-generated batch and
+    # for meridian.corpus.generate_corpus(), which returns both combined.
+    return generate_corpus_batch1(catalog)
 
 
 def by_id(corpus: list[CorpusDocument]) -> dict[str, CorpusDocument]:
