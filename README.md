@@ -53,40 +53,40 @@ padding to 45 with unnamed services.
 ## Corpus generator
 
 `python -m meridian.corpus` (or `meridian.corpus.generate_corpus(catalog)`
-directly) builds a deterministic, deliberately adversarial corpus and writes
-it to `data/corpus/` as markdown files with a YAML frontmatter header. It's
-two batches combined, 297 documents total, still a scaled-down stand-in for
-the spec's full ~1,100-document corpus:
+directly) builds a deterministic corpus and writes it to `data/corpus/` as
+markdown files with a YAML frontmatter header — 474 documents, a scaled-down
+stand-in for the spec's full ~1,100-document corpus. It's built in two layers:
 
-- **Batch 1** (`src/meridian/corpus/generator.py`, 32 docs) — hand-authored
-  one document at a time: 12 runbooks, 9 postmortems, 6 alerts, 3 chat
-  transcripts, 2 catalog docs. The flagship, narratively rich examples.
-- **Batch 2** (`src/meridian/corpus/scale.py`, 265 docs) — template-driven:
-  a fixed taxonomy of ~18 failure categories, one body template per category,
-  and deterministic (no-randomness) assignment of (service, category) pairs
-  to documents. 100 runbooks, 75 postmortems, 50 alerts, 25 chat transcripts,
-  15 catalog docs. This is the bulk/long-tail tier, the same way a real
-  corpus has a long tail of formulaic runbooks behind a handful of
-  well-loved ones — matches how the spec itself describes the full corpus:
-  "generated from templates."
+- **Adversarial** (`src/meridian/corpus/adversarial.py`) — each of the five
+  adversarial cases from spec section 3 has its own generator function
+  taking an explicit target count, so hitting a real evaluable volume per
+  case is a generation parameter, not something bulk generation happens to
+  reproduce (or doesn't). This is the layer the counts below describe.
+- **Baseline** (`src/meridian/corpus/baseline.py`) — template-driven
+  reference material filling out broad coverage across all 41 services,
+  built around whatever the adversarial layer didn't already claim.
 
-Every adversarial case from the spec is built into both batches and asserted
-by `tests/test_corpus.py` (batch 1) and `tests/test_corpus_scale.py` (batch 2
-and the combined corpus) directly against the generated output, not assumed:
+Every adversarial case is asserted by `tests/test_corpus_adversarial.py`
+directly against the generated output — a minimum-count floor per category
+plus a correctness check, so both the volume and the substance of each case
+are regression-guarded:
 
-- near-duplicate runbook pairs where only one is correct for a given alert
-  (1 pair in batch 1, 10 in batch 2)
-- an alert/runbook pair with no shared key vocabulary for the same failure mode
-- alerts with no matching runbook anywhere in the corpus (~10%, cross-checked
-  by scanning the real runbook set rather than trusting a flag)
-- postgres-primary postmortems each covering six real (graph-verified)
-  dependent services, rather than six separate incidents (1 in batch 1, 2
-  non-overlapping ones in batch 2)
-- runbooks referencing services that no longer exist in the catalog (2 in
-  batch 1, 6 more in batch 2, across 5 distinct decommissioned service names)
+| Case | Count | Verified by |
+|---|---|---|
+| Near-duplicate runbook pairs | 28 | textual similarity > 0.55, differing root cause |
+| Vocabulary-mismatch cases | 28 | zero shared key phrase (`src/meridian/corpus/synonyms.py`, 28 alert/runbook phrasing pairs) |
+| Alerts with no matching runbook | 15 | scanned against the *entire* generated runbook set, not just a flag |
+| Cascading-failure sets | 13 | each covers 6 real (`DependencyGraph`-verified) dependents of a hub service, non-overlapping within that hub |
+| Stale runbooks | 10 | across 5 decommissioned service names, all confirmed absent from `load_catalog()` |
 
 postgres-primary, llm-gateway, and notification-service are weighted to
 account for ~40% of "incidents" (alerts + postmortems combined — runbooks are
 reference material and chat transcripts discuss an incident rather than being
-one, so neither counts toward the ratio) — 40.00% exactly in the combined
-corpus.
+one, so neither counts toward the ratio) — 40.1% in the generated corpus.
+Cascades are the exception: only postgres-primary among the three fragile
+services has enough real dependents (24) to support 6-service cascades, so
+the other 9 cascade sets are built on different well-connected hubs
+(redis-cache, postgres-replica, secrets-manager, feature-flags,
+inventory-service, pricing-engine, kafka-broker) rather than forced onto
+llm-gateway or notification-service, which don't have the dependents to
+support one honestly.
