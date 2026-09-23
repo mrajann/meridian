@@ -7,7 +7,7 @@ See [`meridian-spec.md`](meridian-spec.md) for the full technical spec, corpus
 design, agent design, and evaluation plan.
 
 Built incrementally — one branch and one PR per increment, listed in the spec's
-build table. Current: **increment 3** — corpus generator.
+build table. Current: **increment 4** — chunking, embedding, and Chroma indexing.
 
 ## Setup
 
@@ -16,8 +16,10 @@ Requires Python 3.11+.
 ```bash
 python3 -m venv venv
 source venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[dev,local-embeddings]"   # local-embeddings pulls in torch; omit it to run on the
+                                           # dependency-free hashing embedder (EMBEDDING_BACKEND=hashing)
 cp .env.example .env   # then fill in ANTHROPIC_API_KEY
+python -m meridian.indexing build          # chunk, embed, and index the corpus (~20s, first run downloads the model)
 ```
 
 ## Running tests
@@ -32,6 +34,7 @@ pytest
 src/meridian/    application package (import as `meridian`)
 catalog/services/   41 hand-authored service catalog entries (YAML), one per service
 data/corpus/     generated incident corpus (runbooks, postmortems, alerts, chats, catalog docs)
+data/chroma/     persisted vector index (gitignored; rebuilt by `python -m meridian.indexing build`)
 tests/           pytest suite, mirrors src/meridian layout
 .env.example     documents every config value; copy to .env for local secrets
 pyproject.toml   package metadata, dependencies, pytest config
@@ -90,3 +93,49 @@ the other 9 cascade sets are built on different well-connected hubs
 inventory-service, pricing-engine, kafka-broker) rather than forced onto
 llm-gateway or notification-service, which don't have the dependents to
 support one honestly.
+
+## Indexing
+
+`python -m meridian.indexing build` chunks the corpus, embeds each chunk, and
+writes a persisted ChromaDB index (`python -m meridian.indexing query "..."
+--type runbook --tier 1` searches it). The code is in `src/meridian/indexing/`:
+`chunking.py` (per-type strategies), `embeddings.py` (the swappable `Embedder`
+interface), `store.py` (Chroma wrapper), `pipeline.py` (ties them together).
+
+**Chunking is per document type, sized from the embedder.** The chunk budget is
+75% of the embedder's input limit (192 of 256 tokens for the default
+all-MiniLM-L6-v2), counted with the model's own tokenizer, so nothing is
+silently truncated and a model with a bigger window re-chunks automatically.
+
+| Type | Strategy | Overlap |
+|---|---|---|
+| runbook | whole paragraphs packed up to the budget; a numbered procedure is never cut mid-step | none |
+| postmortem | one chunk per named section (Summary / Timeline / Root cause / Remediation / Action items); small sections are not merged | none |
+| chat transcript | sliding window of whole turns | 2 turns |
+| alert, catalog entry | atomic | none |
+| any oversize paragraph | sentence windows | 1 sentence |
+
+Overlap is used only where a boundary is arbitrary. Section, step and
+paragraph boundaries are semantic seams, so overlapping there would only
+duplicate text and put near-identical hits in top-k. Context is carried by a
+header (type, title, services) embedded with each chunk but not stored as its
+content.
+
+Every document in the current corpus fits in 153 tokens, so size-based
+splitting never triggers on it; the oversize paths are covered by tests on
+synthetic long documents. The result is 680 chunks from 474 documents (the
+spec's "6-8k" estimate assumed much longer documents).
+
+**Filterable metadata:** `doc_type`, `service` (primary), `services` (all, matched
+with `$contains`), `tier` (of the primary service, as a string: `"1"`, `"2"`,
+`"3"`, `"external"`, or `"unknown"` for a service missing from the catalog),
+plus `doc_id`, `section`, `chunk_index`. Ground-truth labels
+(`correct_runbook`, `root_cause_category`, ...) are deliberately never indexed,
+so a retriever can't filter on the answer.
+
+**Swapping the embedder:** anything satisfying `Embedder` works. The index
+records which embedder built it and refuses to be queried by a different one
+(vectors from different models are not comparable, and the failure would
+otherwise be silent). `HashingEmbedder` is a dependency-free lexical baseline
+used by CI; the real-model tests skip when `sentence-transformers` isn't
+installed.
