@@ -25,3 +25,21 @@ jobs:
 
       - name: Run tests
         run: pytest -v
+
+      - name: Build index and run retrieval eval
+        # No torch/sentence-transformers in CI (see local-embeddings extra in
+        # pyproject.toml) -- this builds and evaluates on the hashing embedder
+        # as a pipeline regression check. The real-model numbers are
+        # reports/retrieval_eval.md, generated locally and committed.
+        env:
+          EMBEDDING_BACKEND: hashing
+        run: |
+          python -m meridian.indexing build
+          python -m meridian.evals retrieval --out ci-retrieval-eval.md
+
+      - name: Upload retrieval eval report
+        if: matrix.python-version == '3.13'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-retrieval-eval
+          path: ci-retrieval-eval.md

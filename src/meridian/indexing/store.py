@@ -126,6 +126,13 @@ class VectorIndex:
     def count(self) -> int:
         return self._collection().count()
 
+    def all_chunks(self) -> dict[str, list]:
+        """ids/documents/metadatas for every indexed chunk -- the source of
+        truth a keyword index is built from, so it always matches exactly
+        what's in the vector index rather than re-deriving chunks separately."""
+        result = self._collection().get(include=["documents", "metadatas"])
+        return {"ids": result["ids"], "documents": result["documents"], "metadatas": result["metadatas"]}
+
     def query(self, text: str, k: int = 5, where: dict[str, Any] | None = None) -> list[Hit]:
         collection = self._collection()
         result = collection.query(

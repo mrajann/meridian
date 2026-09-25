@@ -7,7 +7,7 @@ See [`meridian-spec.md`](meridian-spec.md) for the full technical spec, corpus
 design, agent design, and evaluation plan.
 
 Built incrementally — one branch and one PR per increment, listed in the spec's
-build table. Current: **increment 4** — chunking, embedding, and Chroma indexing.
+build table. Current: **increment 5** — retrieval layer and retrieval evaluation.
 
 ## Setup
 
@@ -20,6 +20,7 @@ pip install -e ".[dev,local-embeddings]"   # local-embeddings pulls in torch; om
                                            # dependency-free hashing embedder (EMBEDDING_BACKEND=hashing)
 cp .env.example .env   # then fill in ANTHROPIC_API_KEY
 python -m meridian.indexing build          # chunk, embed, and index the corpus (~20s, first run downloads the model)
+python -m meridian.evals retrieval          # run the retrieval eval, writes reports/retrieval_eval.md
 ```
 
 ## Running tests
@@ -35,6 +36,7 @@ src/meridian/    application package (import as `meridian`)
 catalog/services/   41 hand-authored service catalog entries (YAML), one per service
 data/corpus/     generated incident corpus (runbooks, postmortems, alerts, chats, catalog docs)
 data/chroma/     persisted vector index (gitignored; rebuilt by `python -m meridian.indexing build`)
+reports/         generated eval reports (committed -- see Retrieval evaluation below)
 tests/           pytest suite, mirrors src/meridian layout
 .env.example     documents every config value; copy to .env for local secrets
 pyproject.toml   package metadata, dependencies, pytest config
@@ -139,3 +141,66 @@ records which embedder built it and refuses to be queried by a different one
 otherwise be silent). `HashingEmbedder` is a dependency-free lexical baseline
 used by CI; the real-model tests skip when `sentence-transformers` isn't
 installed.
+
+## Retrieval
+
+`src/meridian/retrieval/` wraps the Chroma index (`meridian.indexing`) behind
+a `Retriever` with configurable `k`, metadata filtering (`meridian.indexing.
+store.build_filter`), and three search modes:
+
+- `"vector"` — the semantic similarity search from increment 4, as-is.
+- `"keyword"` — Okapi BM25 (`retrieval/keyword.py`, pure Python, no new
+  dependency) over the exact same chunks, fetched from the index itself
+  (`VectorIndex.all_chunks()`) rather than re-derived, so it can never drift
+  out of sync with what's actually indexed. Reconstructs each chunk's
+  title/services context from metadata, since only the bare chunk text is
+  stored as Chroma's `documents` field — otherwise keyword search would be
+  working from less context than vector search gets from the embedded header.
+- `"hybrid"` — vector and keyword ranked lists combined by Reciprocal Rank
+  Fusion (rank-based, so it needs no normalization across BM25's and cosine
+  similarity's very different scales).
+
+## Retrieval evaluation
+
+`python -m meridian.evals retrieval` runs precision@5/recall@5/MRR for all
+three modes against the corpus's own alerts, which already carry ground truth
+(`correct_runbook`, `has_matching_runbook`, `adversarial_case`) from how the
+corpus is generated — increment 5 needed no separate labelled eval set. Every
+alert has at most one relevant runbook, so precision@k/recall@k/MRR take the
+single-relevant-document form (see `src/meridian/evals/retrieval.py`).
+Results are broken down **by adversarial category**, not just overall, since
+the aggregate hides exactly the cases that matter — see
+[`reports/retrieval_eval.md`](reports/retrieval_eval.md) for the real
+(all-MiniLM-L6-v2) numbers. Highlights as of that report:
+
+- **Near-duplicate runbook pairs are the easiest case** (recall@5 = 1.000):
+  the two runbooks in a pair are near-identical, so whichever the query
+  resembles at all, it resembles strongly.
+- **Vocabulary mismatch is the intended hard case, and it is measurably
+  harder than baseline** — but not dramatically, because the alert and its
+  runbook still share the service name and template wording; only the
+  failure-mode phrase itself differs.
+- **Cascading failures are the hardest category by a wide margin** (recall@5
+  ≈ 0.46, roughly half of every other category, on every retrieval mode).
+  This isn't a bug: a cascade alert's text names the *affected* services,
+  while its root-cause runbook is worded entirely around the *hub* service —
+  a single-query similarity search naturally retrieves runbooks about the
+  named services instead. Confirms the spec's premise that cascade
+  attribution needs more than retrieval alone (the dependency graph from
+  increment 2, reasoned over by an agent).
+
+**No-match / abstention:** for alerts with no correct runbook, does the
+top-1 similarity score alone come out low enough to abstain on? Not cleanly —
+matched and unmatched top-1 scores overlap by roughly 0.2 (vector mode), so a
+single fixed threshold would misclassify cases in that band either way.
+Abstention needs more than top-1 score (e.g. the gap to the #2 hit, or an LLM
+judging the retrieved runbook against the alert) — left for a later increment.
+
+**In CI:** `tests/test_evals_retrieval.py` runs the full eval on the
+dependency-free `HashingEmbedder` and asserts regression-guard floors (not
+quality targets — e.g. cascading failure has no floor, since scoring badly
+there is the expected, documented finding). The workflow also builds the
+index and runs `python -m meridian.evals retrieval` as its own CI step
+(hashing backend, no torch), uploading the report as a build artifact. The
+real semantic numbers in `reports/retrieval_eval.md` are generated locally
+with the real model and committed, the same pattern as the corpus itself.
