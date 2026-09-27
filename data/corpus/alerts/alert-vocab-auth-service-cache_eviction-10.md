@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-auth-service alert: cache miss rate up. Investigate before this breaches SLO further.
+auth-service alert: cache miss rate up. Investigate before it breaches SLO further.

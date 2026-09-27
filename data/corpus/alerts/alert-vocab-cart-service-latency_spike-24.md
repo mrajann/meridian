@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-cart-service alert: cold start latency. Investigate before this breaches SLO further.
+cart-service alert: cold start latency. Investigate before it breaches SLO further.

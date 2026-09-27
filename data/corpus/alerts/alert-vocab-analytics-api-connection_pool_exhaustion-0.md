@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-analytics-api alert: connection pool exhausted. Investigate before this breaches SLO further.
+analytics-api alert: connection pool exhausted. Investigate before it breaches SLO further.

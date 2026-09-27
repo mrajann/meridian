@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-cdn-config alert: health checks flapping. Investigate before this breaches SLO further.
+cdn-config alert: health checks flapping. Investigate before it breaches SLO further.

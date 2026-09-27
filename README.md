@@ -162,45 +162,91 @@ store.build_filter`), and three search modes:
 
 ## Retrieval evaluation
 
-`python -m meridian.evals retrieval` runs precision@5/recall@5/MRR for all
-three modes against the corpus's own alerts, which already carry ground truth
+`python -m meridian.evals retrieval` runs Hit@1/recall@5/MRR for all three
+modes against the corpus's own alerts, which already carry ground truth
 (`correct_runbook`, `has_matching_runbook`, `adversarial_case`) from how the
 corpus is generated — increment 5 needed no separate labelled eval set. Every
-alert has at most one relevant runbook, so precision@k/recall@k/MRR take the
+alert has at most one relevant runbook, so recall@k/MRR take the
 single-relevant-document form (see `src/meridian/evals/retrieval.py`).
+
+**Hit@1, not precision@k, is the top-of-ranking metric.** With exactly one
+relevant document per query, precision@k is capped at 1/k no matter how good
+retrieval is — it made every mode look like it was failing when the ceiling
+was the metric, not the retriever.
+
 Results are broken down **by adversarial category**, not just overall, since
 the aggregate hides exactly the cases that matter — see
 [`reports/retrieval_eval.md`](reports/retrieval_eval.md) for the real
-(all-MiniLM-L6-v2) numbers. Highlights as of that report:
+(all-MiniLM-L6-v2) numbers, regenerated on every run including a live
+[hybrid fusion comparison](#hybrid-fusion). Highlights as of that report:
 
-- **Near-duplicate runbook pairs are the easiest case** (recall@5 = 1.000):
-  the two runbooks in a pair are near-identical, so whichever the query
-  resembles at all, it resembles strongly.
-- **Vocabulary mismatch is the intended hard case, and it is measurably
-  harder than baseline** — but not dramatically, because the alert and its
-  runbook still share the service name and template wording; only the
-  failure-mode phrase itself differs.
-- **Cascading failures are the hardest category by a wide margin** (recall@5
-  ≈ 0.46, roughly half of every other category, on every retrieval mode).
-  This isn't a bug: a cascade alert's text names the *affected* services,
-  while its root-cause runbook is worded entirely around the *hub* service —
-  a single-query similarity search naturally retrieves runbooks about the
-  named services instead. Confirms the spec's premise that cascade
-  attribution needs more than retrieval alone (the dependency graph from
-  increment 2, reasoned over by an agent).
+- **Near-duplicate runbook pairs: recall@5 = 1.000, but Hit@1 is only ~0.4
+  under vector search** — the pair is deliberately near-identical, so both
+  runbooks land in the top 5 regardless of which one ranks first, and
+  disambiguating *which one* comes down to a single named entity (the blamed
+  dependency), which is exactly BM25's strength: keyword search alone hits
+  Hit@1 ≈ 0.71 here, its best category by far.
+- **Vocabulary mismatch is a genuine semantic-only test.** A lexical
+  retriever (keyword search, or the CI-only `HashingEmbedder` standing in for
+  "vector") scores near zero Hit@1 here by design — `tests/test_evals_
+  retrieval.py::test_vocabulary_mismatch_defeats_a_purely_lexical_retriever`
+  guards this directly. This wasn't originally true: the alert and runbook
+  bodies shared an incidental boilerplate word ("this") beyond the service
+  name, letting keyword search partially cheat; removing it dropped
+  keyword's Hit@1 on this category to near zero. The real model still solves
+  about half of these cases outright (`test_real_model_beats_lexical_
+  retrieval_on_vocabulary_mismatch` in `test_embeddings.py`).
+- **Cascading failures are the hardest category by a wide margin** (Hit@1 ≈
+  0.15–0.39 depending on mode, well below every other category). Not a bug:
+  a cascade alert's text names the *affected* services, while its root-cause
+  runbook is worded entirely around the *hub* service — a single-query
+  similarity search naturally retrieves runbooks about the named services
+  instead. Confirms the spec's premise that cascade attribution needs more
+  than retrieval alone (the dependency graph from increment 2, reasoned over
+  by an agent).
 
 **No-match / abstention:** for alerts with no correct runbook, does the
 top-1 similarity score alone come out low enough to abstain on? Not cleanly —
-matched and unmatched top-1 scores overlap by roughly 0.2 (vector mode), so a
-single fixed threshold would misclassify cases in that band either way.
-Abstention needs more than top-1 score (e.g. the gap to the #2 hit, or an LLM
-judging the retrieved runbook against the alert) — left for a later increment.
+matched and unmatched top-1 scores overlap (vector mode), so a single fixed
+threshold would misclassify cases in that band either way. Abstention needs
+more than top-1 score (e.g. the gap to the #2 hit, or an LLM judging the
+retrieved runbook against the alert) — left for a later increment.
+
+**Stale-runbook contamination:** stale runbooks are never the correct answer
+to anything, so the meaningful question is whether they leak into results for
+real incidents anyway. A handful do under vector search (e.g. a
+`checkout-api` alert surfacing the decommissioned `checkout-monolith-v1`
+runbook) — reported per mode, not just asserted absent.
+
+### Hybrid fusion
+
+`meridian.retrieval.Retriever` supports two fusion algorithms for combining
+vector and keyword rankings, both weighted (`vector_weight`/`keyword_weight`):
+
+- **`rrf`** — Reciprocal Rank Fusion, rank-only. At RRF's usual damping
+  constant, reweighting barely moves the fused order — it doesn't distinguish
+  a confident #1 from a marginal one.
+- **`weighted_sum`** (default) — each side's raw scores are min-max
+  normalized to `[0, 1]` over its own candidate pool, then combined linearly.
+  A confident #1 can now actually outweigh a weak one.
+
+The original hybrid mode used unweighted 1:1 RRF, which underperformed pure
+vector search — an even blend drags a strong vector ranking down by mixing in
+a weaker one, since keyword is consistently the weaker retriever here.
+`weighted_sum` at **3:1 (vector:keyword)** beats pure vector on every metric
+instead of merely approximating it, because it still picks up keyword's
+genuinely complementary wins (near-duplicate pairs) while vector's
+already-good ranking dominates everywhere else. The comparison across both
+algorithms and a few weightings is regenerated in every report — see
+`reports/retrieval_eval.md`'s "Hybrid fusion" section for current numbers
+rather than a snapshot here that can drift out of sync.
 
 **In CI:** `tests/test_evals_retrieval.py` runs the full eval on the
 dependency-free `HashingEmbedder` and asserts regression-guard floors (not
 quality targets — e.g. cascading failure has no floor, since scoring badly
-there is the expected, documented finding). The workflow also builds the
-index and runs `python -m meridian.evals retrieval` as its own CI step
+there is the expected, documented finding, and vocabulary mismatch has a
+*ceiling* on lexical retrievers instead of a floor). The workflow also builds
+the index and runs `python -m meridian.evals retrieval` as its own CI step
 (hashing backend, no torch), uploading the report as a build artifact. The
 real semantic numbers in `reports/retrieval_eval.md` are generated locally
 with the real model and committed, the same pattern as the corpus itself.

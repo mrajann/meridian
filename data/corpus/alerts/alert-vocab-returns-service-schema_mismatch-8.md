@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-returns-service alert: schema validation failed. Investigate before this breaches SLO further.
+returns-service alert: schema validation failed. Investigate before it breaches SLO further.

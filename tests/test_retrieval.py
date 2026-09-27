@@ -4,8 +4,15 @@ from meridian.catalog import load_catalog
 from meridian.corpus import generate_corpus
 from meridian.indexing import HashingEmbedder, VectorIndex, build_filter, build_index
 from meridian.retrieval import Retriever
-from meridian.retrieval.keyword import BM25Index, matches_where, tokenize
-from meridian.retrieval.retriever import _reciprocal_rank_fusion
+from meridian.retrieval.keyword import BM25Index, ScoredId, matches_where, tokenize
+from meridian.retrieval.retriever import (
+    DEFAULT_FUSION,
+    DEFAULT_KEYWORD_WEIGHT,
+    DEFAULT_VECTOR_WEIGHT,
+    _minmax_normalize,
+    _reciprocal_rank_fusion,
+    _weighted_sum_fusion,
+)
 
 
 @pytest.fixture(scope="module")
@@ -105,17 +112,72 @@ def test_matches_where_and():
 
 
 def test_rrf_favors_items_ranked_highly_in_both_lists():
-    fused = _reciprocal_rank_fusion([["a", "b", "c"], ["b", "a", "c"]])
+    fused = _reciprocal_rank_fusion([(["a", "b", "c"], 1.0), (["b", "a", "c"], 1.0)])
 
     assert fused["a"] == fused["b"]  # rank 1+2 vs rank 2+1, symmetric
     assert fused["a"] > fused["c"]
 
 
 def test_rrf_credits_an_item_missing_from_one_list():
-    only_in_one = _reciprocal_rank_fusion([["a"], []])
-    in_both = _reciprocal_rank_fusion([["a"], ["a"]])
+    only_in_one = _reciprocal_rank_fusion([(["a"], 1.0), ([], 1.0)])
+    in_both = _reciprocal_rank_fusion([(["a"], 1.0), (["a"], 1.0)])
 
     assert 0 < only_in_one["a"] < in_both["a"]
+
+
+def test_rrf_weight_scales_a_lists_contribution():
+    equal = _reciprocal_rank_fusion([(["a"], 1.0), (["b"], 1.0)])
+    weighted = _reciprocal_rank_fusion([(["a"], 3.0), (["b"], 1.0)])
+
+    assert equal["a"] == equal["b"]
+    assert weighted["a"] > weighted["b"]
+    assert weighted["a"] == pytest.approx(3.0 * equal["a"])
+
+
+# ------------------------------------------------------- weighted-sum fusion
+
+
+def test_minmax_normalize_maps_the_range_to_zero_one():
+    normalized = _minmax_normalize([ScoredId("a", 10.0), ScoredId("b", 20.0), ScoredId("c", 30.0)])
+
+    assert normalized == {"a": 0.0, "b": 0.5, "c": 1.0}
+
+
+def test_minmax_normalize_of_tied_scores_is_all_ones_not_a_division_by_zero():
+    assert _minmax_normalize([ScoredId("a", 5.0), ScoredId("b", 5.0)]) == {"a": 1.0, "b": 1.0}
+
+
+def test_minmax_normalize_of_empty_input_is_empty():
+    assert _minmax_normalize([]) == {}
+
+
+def test_weighted_sum_fusion_lets_a_confident_number_one_outrank_a_weak_ones_rank():
+    from meridian.indexing.store import Hit
+
+    # keyword ranks "b" 1st, vector ranks "a" 1st but only weakly (barely
+    # above the rest) -- with normalization this shows up as a small vector
+    # score for "a", so a strong keyword signal for "b" can still win.
+    vector_hits = [
+        Hit(chunk_id="a", text="", score=0.501, metadata={}),
+        Hit(chunk_id="b", text="", score=0.500, metadata={}),
+        Hit(chunk_id="c", text="", score=0.499, metadata={}),
+    ]
+    keyword_scored = [ScoredId("b", 10.0), ScoredId("c", 1.0), ScoredId("a", 0.5)]
+
+    fused = _weighted_sum_fusion(vector_hits, keyword_scored, vector_weight=1.0, keyword_weight=1.0)
+
+    assert max(fused, key=fused.get) == "b"
+
+
+def test_weighted_sum_fusion_weight_zero_ignores_that_side():
+    from meridian.indexing.store import Hit
+
+    vector_hits = [Hit(chunk_id="a", text="", score=0.9, metadata={})]
+    keyword_scored = [ScoredId("b", 100.0)]
+
+    fused = _weighted_sum_fusion(vector_hits, keyword_scored, vector_weight=1.0, keyword_weight=0.0)
+
+    assert fused == {"a": 1.0, "b": 0.0}
 
 
 # -------------------------------------------------------------- Retriever
@@ -153,6 +215,29 @@ def test_keyword_search_sees_title_and_service_context_like_vector_search_does(r
     hits = retriever.search(runbook.services[0], k=50, where=build_filter(doc_type="runbook"), mode="keyword")
 
     assert runbook.doc_id in {h.doc_id for h in hits}
+
+
+def test_default_fusion_is_weighted_sum_favoring_vector():
+    assert DEFAULT_FUSION == "weighted_sum"
+    assert DEFAULT_VECTOR_WEIGHT > DEFAULT_KEYWORD_WEIGHT
+
+
+def test_hybrid_search_accepts_an_explicit_fusion_and_weights(retriever):
+    default = retriever.search("connection pool exhausted", k=5, mode="hybrid")
+    rrf = retriever.search("connection pool exhausted", k=5, mode="hybrid", fusion="rrf")
+    keyword_only = retriever.search(
+        "connection pool exhausted", k=5, mode="hybrid", vector_weight=0.0, keyword_weight=1.0
+    )
+
+    assert [h.chunk_id for h in default] != [h.chunk_id for h in rrf] or default[0].score != rrf[0].score
+    assert [h.chunk_id for h in keyword_only] == [
+        h.chunk_id for h in retriever.search("connection pool exhausted", k=5, mode="keyword")
+    ]
+
+
+def test_hybrid_unknown_fusion_raises(retriever):
+    with pytest.raises(ValueError, match="unknown fusion algorithm"):
+        retriever.search("x", mode="hybrid", fusion="nonexistent")
 
 
 def test_keyword_index_is_built_once_and_cached(retriever):

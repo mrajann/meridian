@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-auth-service alert: TLS handshake failing. Investigate before this breaches SLO further.
+auth-service alert: TLS handshake failing. Investigate before it breaches SLO further.

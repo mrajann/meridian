@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-api-gateway alert: unexpected behavior with no deploy. Investigate before this breaches SLO further.
+api-gateway alert: unexpected behavior with no deploy. Investigate before it breaches SLO further.

@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-config-service alert: silent failures reported. Investigate before this breaches SLO further.
+config-service alert: silent failures reported. Investigate before it breaches SLO further.

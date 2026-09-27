@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-checkout-api alert: circuit breaker tripped. Investigate before this breaches SLO further.
+checkout-api alert: circuit breaker tripped. Investigate before it breaches SLO further.
