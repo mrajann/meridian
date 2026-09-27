@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-cart-service alert: duplicate writes. Investigate before this breaches SLO further.
+cart-service alert: duplicate writes. Investigate before it breaches SLO further.

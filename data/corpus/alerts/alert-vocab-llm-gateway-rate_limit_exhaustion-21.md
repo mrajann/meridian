@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-llm-gateway alert: requests throttled. Investigate before this breaches SLO further.
+llm-gateway alert: requests throttled. Investigate before it breaches SLO further.

@@ -8,6 +8,7 @@ from meridian.config import Settings
 from meridian.corpus import generate_corpus
 from meridian.indexing import Embedder, HashingEmbedder, chunk_budget, chunk_corpus, get_embedder
 from meridian.indexing.store import build_filter
+from meridian.retrieval import Retriever
 
 
 def cosine(a: list[float], b: list[float]) -> float:
@@ -121,10 +122,11 @@ def test_no_chunk_of_the_real_corpus_is_truncated_by_the_model(real_embedder):
 
 
 def test_semantic_search_is_sane_on_vocabulary_mismatch_cases(real_embedder, tmp_path):
-    """A smoke floor, not an evaluation (precision@k / recall@k is increment 5):
-    alert text should find its differently-worded runbook among the top 5
-    runbooks most of the time. Measured at 24/28 when written; the floor leaves
-    room for model/version drift while still catching a broken pipeline."""
+    """A smoke floor: alert text should find its differently-worded runbook
+    among the top 5 runbooks most of the time. Measured at 24/28 (recall@5)
+    when written; the floor leaves room for model/version drift while still
+    catching a broken pipeline. See test_evals_retrieval.py for the full
+    Hit@1/recall/MRR breakdown this feeds into."""
     from meridian.indexing import VectorIndex, build_index
 
     catalog = load_catalog()
@@ -142,3 +144,35 @@ def test_semantic_search_is_sane_on_vocabulary_mismatch_cases(real_embedder, tmp
 
     assert len(alerts) >= 25
     assert found >= 18, f"only {found}/{len(alerts)} vocabulary-mismatch alerts found their runbook in the top 5"
+
+
+def test_real_model_beats_lexical_retrieval_on_vocabulary_mismatch(real_embedder, tmp_path):
+    """The positive half of the vocabulary-mismatch regression guard (the
+    negative half -- a lexical retriever should score near zero -- lives in
+    test_evals_retrieval.py, since it doesn't need a real model to check).
+    Together they prove the corpus's vocab-mismatch case actually requires
+    semantic understanding rather than being solvable by shared vocabulary:
+    if a future corpus change reintroduces a lexical shortcut, this gap
+    narrows even though the real-model score alone might still look fine.
+    """
+    from meridian.evals import evaluate_mode
+    from meridian.indexing import HashingEmbedder, VectorIndex, build_index
+
+    catalog = load_catalog()
+    documents = generate_corpus(catalog)
+
+    real_index = VectorIndex(tmp_path / "real", real_embedder)
+    build_index(documents, catalog, real_embedder, real_index)
+    real_hit_at_1 = evaluate_mode(Retriever(real_index), documents, "vector").by_category["vocabulary_mismatch"].hit_at_1
+
+    hashing_embedder = HashingEmbedder()
+    hashing_index = VectorIndex(tmp_path / "hashing", hashing_embedder)
+    build_index(documents, catalog, hashing_embedder, hashing_index)
+    lexical_hit_at_1 = (
+        evaluate_mode(Retriever(hashing_index), documents, "vector").by_category["vocabulary_mismatch"].hit_at_1
+    )
+
+    assert real_hit_at_1 >= 0.35, f"expected the real model to clearly solve most cases, got {real_hit_at_1}"
+    assert real_hit_at_1 > lexical_hit_at_1 + 0.2, (
+        f"real model ({real_hit_at_1}) should beat lexical ({lexical_hit_at_1}) by a wide margin here"
+    )

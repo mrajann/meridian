@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-ci-pipeline alert: split-brain observed. Investigate before this breaches SLO further.
+ci-pipeline alert: split-brain observed. Investigate before it breaches SLO further.

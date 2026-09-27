@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-catalog-service alert: noisy neighbor suspected. Investigate before this breaches SLO further.
+catalog-service alert: noisy neighbor suspected. Investigate before it breaches SLO further.

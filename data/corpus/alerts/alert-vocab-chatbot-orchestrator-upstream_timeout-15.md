@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-chatbot-orchestrator alert: upstream call hanging. Investigate before this breaches SLO further.
+chatbot-orchestrator alert: upstream call hanging. Investigate before it breaches SLO further.

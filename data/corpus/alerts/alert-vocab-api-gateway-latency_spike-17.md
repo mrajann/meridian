@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-api-gateway alert: p99 breach. Investigate before this breaches SLO further.
+api-gateway alert: p99 breach. Investigate before it breaches SLO further.

@@ -2,6 +2,27 @@
 hybrid (reciprocal rank fusion) path so the two can be compared."""
 
 from meridian.retrieval.keyword import BM25Index, matches_where, tokenize
-from meridian.retrieval.retriever import FUSION_DEPTH, RRF_K, Mode, Retriever
+from meridian.retrieval.retriever import (
+    DEFAULT_FUSION,
+    DEFAULT_KEYWORD_WEIGHT,
+    DEFAULT_VECTOR_WEIGHT,
+    FUSION_DEPTH,
+    RRF_K,
+    Fusion,
+    Mode,
+    Retriever,
+)
 
-__all__ = ["BM25Index", "FUSION_DEPTH", "Mode", "RRF_K", "Retriever", "matches_where", "tokenize"]
+__all__ = [
+    "BM25Index",
+    "DEFAULT_FUSION",
+    "DEFAULT_KEYWORD_WEIGHT",
+    "DEFAULT_VECTOR_WEIGHT",
+    "FUSION_DEPTH",
+    "Fusion",
+    "Mode",
+    "RRF_K",
+    "Retriever",
+    "matches_where",
+    "tokenize",
+]

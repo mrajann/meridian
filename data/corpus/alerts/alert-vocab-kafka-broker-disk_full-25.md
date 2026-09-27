@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-kafka-broker alert: write amplification. Investigate before this breaches SLO further.
+kafka-broker alert: write amplification. Investigate before it breaches SLO further.

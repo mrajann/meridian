@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-api-gateway alert: 5xx spike. Investigate before this breaches SLO further.
+api-gateway alert: 5xx spike. Investigate before it breaches SLO further.

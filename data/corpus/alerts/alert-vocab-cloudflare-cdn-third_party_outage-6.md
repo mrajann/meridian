@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-cloudflare-cdn alert: vendor outage. Investigate before this breaches SLO further.
+cloudflare-cdn alert: vendor outage. Investigate before it breaches SLO further.

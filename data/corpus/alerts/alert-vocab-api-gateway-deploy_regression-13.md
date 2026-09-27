@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-api-gateway alert: regression right after deploy. Investigate before this breaches SLO further.
+api-gateway alert: regression right after deploy. Investigate before it breaches SLO further.

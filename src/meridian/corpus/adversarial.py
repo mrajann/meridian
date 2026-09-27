@@ -177,7 +177,7 @@ def generate_vocabulary_mismatch_cases(catalog: dict[str, ServiceEntry], count: 
                     "fragile_service": service if service in FRAGILE_SERVICES else None,
                     "adversarial_case": "vocabulary_mismatch",
                 },
-                body=f"{service} alert: {pair['alert_phrase']}. Investigate before this breaches SLO further.",
+                body=f"{service} alert: {pair['alert_phrase']}. Investigate before it breaches SLO further.",
             )
         )
 

@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-notification-service alert: stale results returned. Investigate before this breaches SLO further.
+notification-service alert: stale results returned. Investigate before it breaches SLO further.

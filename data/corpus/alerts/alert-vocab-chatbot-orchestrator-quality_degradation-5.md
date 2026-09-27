@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-chatbot-orchestrator alert: quality score dropped. Investigate before this breaches SLO further.
+chatbot-orchestrator alert: quality score dropped. Investigate before it breaches SLO further.

@@ -5,9 +5,11 @@ Modes:
 - "vector"  -- the Chroma similarity search from meridian.indexing, as-is.
 - "keyword" -- BM25 over the same chunks (see keyword.py), for comparison
   against and as one half of hybrid.
-- "hybrid"  -- vector and keyword ranked lists combined by Reciprocal Rank
-  Fusion. RRF needs no score normalization across the two very different
-  scales (cosine similarity vs. BM25), which a weighted-sum blend would.
+- "hybrid"  -- vector and keyword combined. Two fusion algorithms are
+  available (see `fusion`); both are weighted, because keyword is
+  consistently the weaker retriever here (see reports/retrieval_eval.md),
+  and an unweighted 1:1 blend drags a strong vector ranking down by mixing
+  in a weaker one rather than only picking up genuinely complementary hits.
 """
 
 from __future__ import annotations
@@ -15,9 +17,10 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from meridian.indexing.store import Hit, VectorIndex
-from meridian.retrieval.keyword import BM25Index, matches_where, tokenize
+from meridian.retrieval.keyword import BM25Index, ScoredId, matches_where, tokenize
 
 Mode = Literal["vector", "keyword", "hybrid"]
+Fusion = Literal["rrf", "weighted_sum"]
 
 # How many candidates each side of a hybrid search contributes before fusion.
 # Wider than the final k so fusion has real ranked lists to combine rather
@@ -27,12 +30,58 @@ FUSION_DEPTH = 20
 # single method's #1 vs #2 doesn't dominate the fused ranking outright.
 RRF_K = 60
 
+# Default fusion algorithm and weights. See reports/retrieval_eval.md
+# ("Hybrid fusion") for current, regenerated-on-every-run numbers rather than
+# a snapshot here that can drift out of sync with what's actually measured --
+# as of the investigation that set these defaults: unweighted 1:1 RRF (the
+# original default) underperformed pure vector on Hit@1/recall/MRR, because
+# RRF only sees rank, not how confident either side is, so with RRF_K's
+# damping, reweighting it barely moved the fused order at all. weighted_sum
+# normalizes each side's raw scores to [0, 1] over its own candidate pool
+# first, so a confident #1 actually outweighs a weak one; at 3:1 it beat pure
+# vector outright (not merely approximated it) by still picking up keyword's
+# genuinely complementary wins (BM25 clearly wins on near-duplicate pairs,
+# where the deciding signal is a literal named entity, not a paraphrase)
+# while vector's already-good ranking dominates the rest.
+DEFAULT_VECTOR_WEIGHT = 3.0
+DEFAULT_KEYWORD_WEIGHT = 1.0
+DEFAULT_FUSION: Fusion = "weighted_sum"
 
-def _reciprocal_rank_fusion(rankings: list[list[str]], k: int = RRF_K) -> dict[str, float]:
+
+def _reciprocal_rank_fusion(weighted_rankings: list[tuple[list[str], float]], k: int = RRF_K) -> dict[str, float]:
     scores: dict[str, float] = {}
-    for ranking in rankings:
+    for ranking, weight in weighted_rankings:
         for rank, item_id in enumerate(ranking, start=1):
-            scores[item_id] = scores.get(item_id, 0.0) + 1.0 / (k + rank)
+            scores[item_id] = scores.get(item_id, 0.0) + weight / (k + rank)
+    return scores
+
+
+def _minmax_normalize(scored: list[ScoredId]) -> dict[str, float]:
+    if not scored:
+        return {}
+    values = [s.score for s in scored]
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        return {s.id: 1.0 for s in scored}
+    return {s.id: (s.score - lo) / (hi - lo) for s in scored}
+
+
+def _weighted_sum_fusion(
+    vector_hits: list[Hit], keyword_hits: list[ScoredId], vector_weight: float, keyword_weight: float
+) -> dict[str, float]:
+    """Alternative to RRF: min-max normalize each side's raw scores to [0, 1]
+    over its own candidate pool, then combine linearly. Unlike RRF (which
+    only sees rank), this lets a method express *how much* better its #1 is
+    than its #2 -- at the cost of that normalization being pool-dependent
+    rather than a stable, comparable unit like RRF's rank-based score."""
+    vector_norm = _minmax_normalize([ScoredId(h.chunk_id, h.score) for h in vector_hits])
+    keyword_norm = _minmax_normalize(keyword_hits)
+
+    scores: dict[str, float] = {}
+    for item_id, value in vector_norm.items():
+        scores[item_id] = scores.get(item_id, 0.0) + vector_weight * value
+    for item_id, value in keyword_norm.items():
+        scores[item_id] = scores.get(item_id, 0.0) + keyword_weight * value
     return scores
 
 
@@ -64,13 +113,22 @@ class Retriever:
             self._bm25 = BM25Index(chunks["ids"], texts, chunks["metadatas"])
         return self._bm25
 
-    def search(self, query: str, k: int = 5, where: dict[str, Any] | None = None, mode: Mode = "vector") -> list[Hit]:
+    def search(
+        self,
+        query: str,
+        k: int = 5,
+        where: dict[str, Any] | None = None,
+        mode: Mode = "vector",
+        fusion: Fusion = DEFAULT_FUSION,
+        vector_weight: float = DEFAULT_VECTOR_WEIGHT,
+        keyword_weight: float = DEFAULT_KEYWORD_WEIGHT,
+    ) -> list[Hit]:
         if mode == "vector":
             return self.vector_index.query(query, k=k, where=where)
         if mode == "keyword":
             return self._keyword_hits(query, k, where)
         if mode == "hybrid":
-            return self._hybrid_hits(query, k, where)
+            return self._hybrid_hits(query, k, where, fusion, vector_weight, keyword_weight)
         raise ValueError(f"unknown retrieval mode: {mode!r}")
 
     def _keyword_hits(self, query: str, k: int, where: dict[str, Any] | None) -> list[Hit]:
@@ -80,11 +138,30 @@ class Retriever:
             Hit(chunk_id=s.id, text=by_id[s.id][0], score=s.score, metadata=by_id[s.id][1]) for s in scored
         ]
 
-    def _hybrid_hits(self, query: str, k: int, where: dict[str, Any] | None) -> list[Hit]:
-        vector_ranking = [h.chunk_id for h in self.vector_index.query(query, k=FUSION_DEPTH, where=where)]
-        keyword_ranking = [s.id for s in self._keyword_index().search(query, k=FUSION_DEPTH, where=where)]
+    def _hybrid_hits(
+        self,
+        query: str,
+        k: int,
+        where: dict[str, Any] | None,
+        fusion: Fusion,
+        vector_weight: float,
+        keyword_weight: float,
+    ) -> list[Hit]:
+        vector_hits = self.vector_index.query(query, k=FUSION_DEPTH, where=where)
+        keyword_scored = self._keyword_index().search(query, k=FUSION_DEPTH, where=where)
 
-        fused = _reciprocal_rank_fusion([vector_ranking, keyword_ranking])
+        if fusion == "rrf":
+            fused = _reciprocal_rank_fusion(
+                [
+                    ([h.chunk_id for h in vector_hits], vector_weight),
+                    ([s.id for s in keyword_scored], keyword_weight),
+                ]
+            )
+        elif fusion == "weighted_sum":
+            fused = _weighted_sum_fusion(vector_hits, keyword_scored, vector_weight, keyword_weight)
+        else:
+            raise ValueError(f"unknown fusion algorithm: {fusion!r}")
+
         ranked_ids = sorted(fused, key=lambda item_id: fused[item_id], reverse=True)[:k]
 
         by_id = self._chunk_lookup()
@@ -97,4 +174,15 @@ class Retriever:
         return self._lookup
 
 
-__all__ = ["FUSION_DEPTH", "RRF_K", "Mode", "Retriever", "matches_where", "tokenize"]
+__all__ = [
+    "DEFAULT_FUSION",
+    "DEFAULT_KEYWORD_WEIGHT",
+    "DEFAULT_VECTOR_WEIGHT",
+    "FUSION_DEPTH",
+    "RRF_K",
+    "Fusion",
+    "Mode",
+    "Retriever",
+    "matches_where",
+    "tokenize",
+]

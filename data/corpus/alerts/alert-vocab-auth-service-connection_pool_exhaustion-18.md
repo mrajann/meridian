@@ -13,4 +13,4 @@ metadata:
   adversarial_case: vocabulary_mismatch
 ---
 
-auth-service alert: zombie connections piling up. Investigate before this breaches SLO further.
+auth-service alert: zombie connections piling up. Investigate before it breaches SLO further.
