@@ -11,7 +11,7 @@ retriever -- so the top-of-ranking metric here is Hit@1 (did the correct
 runbook come back first) instead. Recall@k and MRR still use the full
 ranked list. Alerts without a matching runbook (has_matching_runbook=False)
 have no positive to score against and are excluded from these metrics --
-they get their own no-match/abstention analysis instead (see NoMatchAnalysis
+they get their own abstention analysis instead (see AbstentionAnalysis
 below), which is the actually meaningful question for them.
 """
 
@@ -73,10 +73,6 @@ class CaseResult:
     hits: list[Hit]  # deduped by doc_id, rank order
     rank: int | None  # 1-based rank of the correct runbook, or None if not found within SEARCH_DEPTH
 
-    @property
-    def top_score(self) -> float | None:
-        return self.hits[0].score if self.hits else None
-
 
 def _evaluate_case(retriever: Retriever, case: EvalCase, mode: Mode, search_depth: int, **search_kwargs) -> CaseResult:
     hits = _dedupe_by_doc(
@@ -116,6 +112,7 @@ def _aggregate(results: list[CaseResult], k: int) -> Metrics:
 class ScoreStats:
     n: int
     mean: float
+    std: float
     median: float
     min: float
     max: float
@@ -125,37 +122,131 @@ def _score_stats(scores: list[float]) -> ScoreStats | None:
     if not scores:
         return None
     return ScoreStats(
-        n=len(scores), mean=statistics.mean(scores), median=statistics.median(scores),
-        min=min(scores), max=max(scores),
+        n=len(scores),
+        mean=statistics.mean(scores),
+        std=statistics.stdev(scores) if len(scores) > 1 else 0.0,
+        median=statistics.median(scores),
+        min=min(scores),
+        max=max(scores),
     )
 
 
-@dataclass(frozen=True)
-class NoMatchAnalysis:
-    """Whether the top-1 similarity score alone could tell an agent 'abstain,
-    I have no real match' apart from 'yes, this is the answer'."""
+def _auc(matched: list[float], unmatched: list[float]) -> float | None:
+    """Probability that a randomly chosen matched case scores higher than a
+    randomly chosen unmatched one (ties count half). 0.5 is a coin flip, 1.0
+    is perfect separation, and it needs no threshold -- so unlike the best
+    threshold below, it isn't flattered by fitting 15 unmatched cases."""
+    if not matched or not unmatched:
+        return None
+    wins = sum((m > u) + 0.5 * (m == u) for m in matched for u in unmatched)
+    return wins / (len(matched) * len(unmatched))
 
+
+@dataclass(frozen=True)
+class ThresholdResult:
+    """Rule: answer when score >= threshold, abstain otherwise."""
+
+    threshold: float
+    abstain_correctly: float  # fraction of unmatched incidents abstained on
+    abstain_wrongly: float  # fraction of matched incidents abstained on anyway
+    balanced_accuracy: float
+
+
+def _best_threshold(matched: list[float], unmatched: list[float]) -> ThresholdResult | None:
+    """The cutoff maximizing balanced accuracy. Chosen on the very cases it's
+    then scored on, so it is optimistic -- an upper bound on what a fixed
+    threshold would do, not an estimate of held-out performance."""
+    if not matched or not unmatched:
+        return None
+    best: ThresholdResult | None = None
+    for t in sorted(set(matched + unmatched)):
+        correct = sum(u < t for u in unmatched) / len(unmatched)
+        wrong = sum(m < t for m in matched) / len(matched)
+        candidate = ThresholdResult(t, correct, wrong, (correct + (1 - wrong)) / 2)
+        if best is None or candidate.balanced_accuracy > best.balanced_accuracy:
+            best = candidate
+    return best
+
+
+@dataclass(frozen=True)
+class SignalAnalysis:
+    """One scalar a retriever exposes, compared between incidents that have a
+    correct runbook and ones that don't. Higher is read as "more likely a real
+    match", so abstention means scoring *below* a threshold."""
+
+    name: str
     matched: ScoreStats | None
     unmatched: ScoreStats | None
+    auc: float | None
+    best_threshold: ThresholdResult | None
 
     @property
     def separable(self) -> bool | None:
-        """True if every unmatched top score is below every matched top score
-        -- i.e. a single threshold would perfectly separate them. None if
-        either group is empty."""
+        """True if every unmatched score is below every matched score, i.e.
+        some threshold classifies every case correctly."""
         if not self.matched or not self.unmatched:
             return None
         return self.unmatched.max < self.matched.min
 
     @property
     def overlap(self) -> float | None:
-        """How much the two score ranges overlap, in score units. 0 (or
-        negative headroom below) means cleanly separable; positive means a
-        band of scores that both matched and unmatched cases land in, where a
-        threshold alone can't decide."""
+        """Width of the score band both groups occupy, in this signal's own
+        units (cosine, here); <= 0 means cleanly separable. Only comparable
+        between two signals measured on the same scale."""
         if not self.matched or not self.unmatched:
             return None
         return self.unmatched.max - self.matched.min
+
+
+def _signal(name: str, matched: list[float], unmatched: list[float]) -> SignalAnalysis:
+    return SignalAnalysis(
+        name=name,
+        matched=_score_stats(matched),
+        unmatched=_score_stats(unmatched),
+        auc=_auc(matched, unmatched),
+        best_threshold=_best_threshold(matched, unmatched),
+    )
+
+
+@dataclass(frozen=True)
+class AbstentionAnalysis:
+    """Could an agent tell "I found nothing" from "I found it" using only what
+    retrieval returns? Judged on raw vector cosine similarity regardless of
+    retrieval mode -- it's the one absolute-scale score available. BM25 is
+    unbounded and depends on query length and corpus statistics; the hybrid
+    weighted_sum score is min-max normalized per query, so its best hit lands
+    near the maximum however weak the match. Neither is comparable *across*
+    queries, which is exactly what a threshold needs."""
+
+    top1_cosine: SignalAnalysis
+    gap: SignalAnalysis  # top-1 cosine minus top-2 cosine
+    n_without_second_hit: int  # excluded from `gap`: fewer than two documents retrieved
+
+
+def analyze_abstention(
+    retriever: Retriever, documents: list[CorpusDocument], search_depth: int = SEARCH_DEPTH
+) -> AbstentionAnalysis:
+    top1: dict[bool, list[float]] = {True: [], False: []}
+    gaps: dict[bool, list[float]] = {True: [], False: []}
+    without_second = 0
+
+    for case in build_eval_cases(documents):
+        hits = _dedupe_by_doc(
+            retriever.search(case.query, k=search_depth, where=build_filter(doc_type="runbook"), mode="vector")
+        )
+        if not hits:
+            continue
+        top1[case.has_matching_runbook].append(hits[0].score)
+        if len(hits) > 1:
+            gaps[case.has_matching_runbook].append(hits[0].score - hits[1].score)
+        else:
+            without_second += 1
+
+    return AbstentionAnalysis(
+        top1_cosine=_signal("top-1 cosine", top1[True], top1[False]),
+        gap=_signal("gap (top-1 - top-2 cosine)", gaps[True], gaps[False]),
+        n_without_second_hit=without_second,
+    )
 
 
 @dataclass(frozen=True)
@@ -187,7 +278,6 @@ class ModeReport:
     k: int
     overall: Metrics
     by_category: dict[str, Metrics]
-    no_match: NoMatchAnalysis
     stale_contamination: StaleContamination
     case_results: list[CaseResult]
 
@@ -232,6 +322,7 @@ def compare_fusion_strategies(
 class RetrievalEvalReport:
     embedder_name: str
     modes: dict[Mode, ModeReport]
+    abstention: AbstentionAnalysis
     fusion_comparison: list[tuple[str, Metrics]]
     generated_at: str
 
@@ -259,16 +350,10 @@ def evaluate_mode(
     results = [_evaluate_case(retriever, case, mode, search_depth) for case in cases]
 
     matched = [r for r in results if r.case.has_matching_runbook]
-    unmatched = [r for r in results if not r.case.has_matching_runbook]
 
     by_category: dict[str, Metrics] = {}
     for category in sorted({r.case.category for r in matched}):
         by_category[category] = _aggregate([r for r in matched if r.case.category == category], k)
-
-    no_match = NoMatchAnalysis(
-        matched=_score_stats([r.top_score for r in matched if r.top_score is not None]),
-        unmatched=_score_stats([r.top_score for r in unmatched if r.top_score is not None]),
-    )
 
     stale_ids = {doc.doc_id for doc in documents if doc.doc_type == "runbook" and "stale_reference" in doc.metadata}
 
@@ -277,7 +362,6 @@ def evaluate_mode(
         k=k,
         overall=_aggregate(matched, k),
         by_category=by_category,
-        no_match=no_match,
         stale_contamination=_stale_contamination(results, stale_ids, k),
         case_results=results,
     )
@@ -295,6 +379,7 @@ def evaluate_retrieval(
     return RetrievalEvalReport(
         embedder_name=embedder_name,
         modes={mode: evaluate_mode(retriever, documents, mode, k) for mode in modes},
+        abstention=analyze_abstention(retriever, documents),
         fusion_comparison=compare_fusion_strategies(retriever, documents, k) if "hybrid" in modes else [],
         generated_at=datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
     )
