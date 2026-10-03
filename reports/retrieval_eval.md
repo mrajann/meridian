@@ -1,8 +1,8 @@
 # Retrieval evaluation
 
-Embedder: `sentence-transformers/all-MiniLM-L6-v2` | generated 2026-09-27 08:05 UTC
+Embedder: `sentence-transformers/all-MiniLM-L6-v2` | generated 2026-10-03 08:00 UTC
 
-Ground truth comes from the corpus's own alert metadata (`correct_runbook`, `has_matching_runbook`, `adversarial_case`) -- see `src/meridian/corpus/adversarial.py` and `src/meridian/evals/retrieval.py`. Hit@1/recall/MRR are computed only over alerts that have a correct runbook; alerts with none are covered by the no-match analysis in each mode's section instead. Hit@1 (not precision@k) is the top-of-ranking metric: with exactly one relevant document per query, precision@k is capped at 1/k regardless of retrieval quality, which makes every mode look like it's failing when the ceiling is the metric, not the retriever.
+Ground truth comes from the corpus's own alert metadata (`correct_runbook`, `has_matching_runbook`, `adversarial_case`) -- see `src/meridian/corpus/adversarial.py` and `src/meridian/evals/retrieval.py`. Hit@1/recall/MRR are computed only over alerts that have a correct runbook; alerts with none are covered by the abstention analysis instead. Hit@1 (not precision@k) is the top-of-ranking metric: with exactly one relevant document per query, precision@k is capped at 1/k regardless of retrieval quality, which makes every mode look like it's failing when the ceiling is the metric, not the retriever.
 
 ## Mode comparison (overall, matched incidents)
 
@@ -26,17 +26,6 @@ Matched incidents only (has_matching_runbook=True); k=5, search depth=10.
 | vocabulary mismatch | 28 | 0.500 | 0.857 | 0.638 |
 
 Weakest category: **cascading failure** (Hit@1=0.154, n=13).
-
-#### No-match / abstention analysis
-
-Top-1 similarity score of the best runbook hit, matched incidents vs. incidents with no correct runbook:
-
-| Group | n | mean | median | min | max |
-|---|---:|---:|---:|---:|---:|
-| has matching runbook | 109 | 0.655 | 0.660 | 0.470 | 0.788 |
-| **no** matching runbook | 15 | 0.608 | 0.631 | 0.500 | 0.682 |
-
-**Not cleanly separable**: no-match top scores go as high as 0.682, above the lowest matched top score (0.470) -- an overlap of 0.212. A single score threshold will misclassify some cases in that band either way; abstention needs more than top-1 score alone (e.g. the score gap to the #2 hit, or an LLM judging the retrieved runbook against the alert).
 
 #### Stale-runbook contamination
 
@@ -63,17 +52,6 @@ Matched incidents only (has_matching_runbook=True); k=5, search depth=10.
 
 Weakest category: **vocabulary mismatch** (Hit@1=0.071, n=28).
 
-#### No-match / abstention analysis
-
-Top-1 similarity score of the best runbook hit, matched incidents vs. incidents with no correct runbook:
-
-| Group | n | mean | median | min | max |
-|---|---:|---:|---:|---:|---:|
-| has matching runbook | 109 | 22.613 | 24.129 | 7.057 | 43.020 |
-| **no** matching runbook | 15 | 23.397 | 22.401 | 16.292 | 35.141 |
-
-**Not cleanly separable**: no-match top scores go as high as 35.141, above the lowest matched top score (7.057) -- an overlap of 28.084. A single score threshold will misclassify some cases in that band either way; abstention needs more than top-1 score alone (e.g. the score gap to the #2 hit, or an LLM judging the retrieved runbook against the alert).
-
 #### Stale-runbook contamination
 
 Stale runbooks (referencing a decommissioned service) are never the correct answer to any alert -- the question is whether they leak into results for real incidents anyway. **0/124** incidents (0.0%) have a stale runbook in their top-5 runbook results.
@@ -93,17 +71,6 @@ Matched incidents only (has_matching_runbook=True); k=5, search depth=10.
 
 Weakest category: **cascading failure** (Hit@1=0.385, n=13).
 
-#### No-match / abstention analysis
-
-Top-1 similarity score of the best runbook hit, matched incidents vs. incidents with no correct runbook:
-
-| Group | n | mean | median | min | max |
-|---|---:|---:|---:|---:|---:|
-| has matching runbook | 109 | 3.806 | 3.967 | 3.000 | 4.000 |
-| **no** matching runbook | 15 | 3.613 | 3.638 | 3.000 | 4.000 |
-
-**Not cleanly separable**: no-match top scores go as high as 4.000, above the lowest matched top score (3.000) -- an overlap of 1.000. A single score threshold will misclassify some cases in that band either way; abstention needs more than top-1 score alone (e.g. the score gap to the #2 hit, or an LLM judging the retrieved runbook against the alert).
-
 #### Stale-runbook contamination
 
 Stale runbooks (referencing a decommissioned service) are never the correct answer to any alert -- the question is whether they leak into results for real incidents anyway. **3/124** incidents (2.4%) have a stale runbook in their top-5 runbook results.
@@ -112,6 +79,41 @@ Examples (incident → stale runbook surfaced):
 - `alert-baseline-checkout-api-upstream_timeout` → `runbook-stale-checkout-monolith-v1`
 - `alert-near-dup-warehouse-api` → `runbook-stale-warehouse-mainframe-v1`
 - `alert-no-match-checkout-api-5xx_errors` → `runbook-stale-checkout-monolith-v1`
+
+
+## Abstention analysis
+
+Could an agent tell "I found nothing" from "I found it" using only what retrieval returns? 15 incidents have no correct runbook anywhere in the corpus; 109 do. With only 15 no-match cases, every figure below is a rough estimate.
+
+Both signals are computed from **raw vector cosine similarity**, regardless of retrieval mode (cosine = 1 - Chroma cosine distance; range -1 to 1). It is the only absolute-scale score available: keyword search returns raw BM25, which is unbounded and depends on query length and corpus statistics, and hybrid `weighted_sum` returns a per-query min-max-normalized score, so a query's best hit lands near the maximum however weak the match. Neither can be compared *across* queries, which is what a threshold needs, so neither is used here.
+
+### Signal 1: top-1 cosine similarity
+
+| Group | n | mean cosine | std dev | median | min | max |
+|---|---:|---:|---:|---:|---:|---:|
+| has matching runbook | 109 | 0.655 | 0.084 | 0.660 | 0.470 | 0.788 |
+| **no** matching runbook | 15 | 0.608 | 0.061 | 0.631 | 0.500 | 0.682 |
+
+**Not separable**: the two groups share a band of 0.212 cosine (no-match values reach 0.682; matched values go as low as 0.470).
+
+AUC = 0.669: the chance a randomly chosen matched incident scores higher than a randomly chosen no-match one (0.5 is a coin flip, 1.0 is perfect separation). Needs no threshold.
+
+Best single threshold (answer if cosine >= 0.690, otherwise abstain): correctly abstains on 100% of the 15 no-match incidents, but also abstains on 56% of the 109 incidents that do have a runbook (balanced accuracy 0.720). Chosen on these same cases, so this is optimistic.
+
+### Signal 2: gap between the top two hits (top-1 cosine minus top-2 cosine)
+
+A weak lead could mean "nothing distinctive found" even when the absolute score looks fine.
+
+| Group | n | mean cosine gap | std dev | median | min | max |
+|---|---:|---:|---:|---:|---:|---:|
+| has matching runbook | 109 | 0.040 | 0.041 | 0.030 | 0.000 | 0.179 |
+| **no** matching runbook | 15 | 0.034 | 0.029 | 0.030 | 0.001 | 0.083 |
+
+**Not separable**: the two groups share a band of 0.083 cosine gap (no-match values reach 0.083; matched values go as low as 0.000).
+
+AUC = 0.524: the chance a randomly chosen matched incident scores higher than a randomly chosen no-match one (0.5 is a coin flip, 1.0 is perfect separation). Needs no threshold.
+
+Best single threshold (answer if cosine gap >= 0.002, otherwise abstain): correctly abstains on 27% of the 15 no-match incidents, but also abstains on 6% of the 109 incidents that do have a runbook (balanced accuracy 0.606). Chosen on these same cases, so this is optimistic.
 
 
 ## Hybrid fusion: how scores are combined and weighted

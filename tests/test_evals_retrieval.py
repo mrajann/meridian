@@ -3,6 +3,7 @@ import pytest
 from meridian.catalog import load_catalog
 from meridian.corpus import generate_corpus
 from meridian.evals import (
+    analyze_abstention,
     build_eval_cases,
     compare_fusion_strategies,
     evaluate_mode,
@@ -14,10 +15,14 @@ from meridian.evals.retrieval import (
     CaseResult,
     EvalCase,
     Metrics,
-    NoMatchAnalysis,
     ScoreStats,
+    SignalAnalysis,
     StaleContamination,
+    ThresholdResult,
     _aggregate,
+    _auc,
+    _best_threshold,
+    _score_stats,
 )
 from meridian.indexing import HashingEmbedder, VectorIndex, build_index
 from meridian.indexing.store import Hit
@@ -143,34 +148,103 @@ def test_hit_at_1_is_not_capped_at_one_over_k_unlike_precision_at_k():
     assert metrics.hit_at_1 == 1.0
 
 
-# -------------------------------------------------------- no-match analysis
+# ---------------------------------------------------- abstention statistics
 
 
-def test_separable_when_every_unmatched_score_is_below_every_matched_score():
-    analysis = NoMatchAnalysis(
-        matched=ScoreStats(n=2, mean=0.8, median=0.8, min=0.7, max=0.9),
-        unmatched=ScoreStats(n=2, mean=0.5, median=0.5, min=0.4, max=0.6),
+def test_score_stats_includes_sample_standard_deviation():
+    stats = _score_stats([1.0, 2.0, 3.0, 4.0])
+
+    assert stats == ScoreStats(n=4, mean=2.5, std=pytest.approx(1.2909944), median=2.5, min=1.0, max=4.0)
+
+
+def test_score_stats_of_a_single_value_has_zero_std_not_an_error():
+    assert _score_stats([0.5]).std == 0.0
+
+
+def test_score_stats_of_nothing_is_none():
+    assert _score_stats([]) is None
+
+
+def test_auc_is_one_when_every_matched_score_beats_every_unmatched_score():
+    assert _auc([0.7, 0.8], [0.1, 0.2]) == 1.0
+
+
+def test_auc_is_zero_when_every_unmatched_score_beats_every_matched_score():
+    assert _auc([0.1, 0.2], [0.7, 0.8]) == 0.0
+
+
+def test_auc_counts_ties_as_half():
+    assert _auc([0.5], [0.5]) == 0.5
+
+
+def test_auc_is_a_coin_flip_for_identical_distributions():
+    assert _auc([1.0, 2.0, 3.0], [1.0, 2.0, 3.0]) == 0.5
+
+
+def test_auc_without_both_groups_is_undefined():
+    assert _auc([], [0.5]) is None
+    assert _auc([0.5], []) is None
+
+
+def test_best_threshold_on_perfectly_separable_scores_gets_everything_right():
+    best = _best_threshold(matched=[0.7, 0.8, 0.9], unmatched=[0.1, 0.2, 0.3])
+
+    assert best.abstain_correctly == 1.0
+    assert best.abstain_wrongly == 0.0
+    assert best.balanced_accuracy == 1.0
+    assert 0.3 < best.threshold <= 0.7
+
+
+def test_best_threshold_on_overlapping_scores_reports_the_tradeoff():
+    # One unmatched value (0.6) sits above one matched value (0.5): no
+    # threshold gets both groups fully right.
+    best = _best_threshold(matched=[0.5, 0.7, 0.8], unmatched=[0.2, 0.3, 0.6])
+
+    assert best.balanced_accuracy < 1.0
+    assert best.balanced_accuracy == pytest.approx(
+        (best.abstain_correctly + (1 - best.abstain_wrongly)) / 2
     )
 
-    assert analysis.separable is True
-    assert analysis.overlap == pytest.approx(0.6 - 0.7)  # negative: real headroom, not just "not overlapping"
+
+def test_best_threshold_rule_is_answer_at_or_above_and_abstain_below():
+    best = _best_threshold(matched=[0.6], unmatched=[0.4])
+
+    assert best == ThresholdResult(threshold=0.6, abstain_correctly=1.0, abstain_wrongly=0.0, balanced_accuracy=1.0)
 
 
-def test_not_separable_when_ranges_overlap():
-    analysis = NoMatchAnalysis(
-        matched=ScoreStats(n=2, mean=0.6, median=0.6, min=0.5, max=0.7),
-        unmatched=ScoreStats(n=2, mean=0.55, median=0.55, min=0.4, max=0.6),
+def test_signal_separable_when_every_unmatched_value_is_below_every_matched_value():
+    signal = SignalAnalysis(
+        name="x",
+        matched=ScoreStats(n=2, mean=0.8, std=0.1, median=0.8, min=0.7, max=0.9),
+        unmatched=ScoreStats(n=2, mean=0.5, std=0.1, median=0.5, min=0.4, max=0.6),
+        auc=1.0,
+        best_threshold=None,
     )
 
-    assert analysis.separable is False
-    assert analysis.overlap == pytest.approx(0.1)
+    assert signal.separable is True
+    assert signal.overlap == pytest.approx(0.6 - 0.7)  # negative: real headroom, not just "no overlap"
 
 
-def test_separability_undefined_without_both_groups():
-    analysis = NoMatchAnalysis(matched=None, unmatched=ScoreStats(1, 0.5, 0.5, 0.5, 0.5))
+def test_signal_not_separable_when_ranges_overlap():
+    signal = SignalAnalysis(
+        name="x",
+        matched=ScoreStats(n=2, mean=0.6, std=0.1, median=0.6, min=0.5, max=0.7),
+        unmatched=ScoreStats(n=2, mean=0.55, std=0.1, median=0.55, min=0.4, max=0.6),
+        auc=0.6,
+        best_threshold=None,
+    )
 
-    assert analysis.separable is None
-    assert analysis.overlap is None
+    assert signal.separable is False
+    assert signal.overlap == pytest.approx(0.1)
+
+
+def test_signal_separability_undefined_without_both_groups():
+    signal = SignalAnalysis(
+        name="x", matched=None, unmatched=ScoreStats(1, 0.5, 0.0, 0.5, 0.5, 0.5), auc=None, best_threshold=None
+    )
+
+    assert signal.separable is None
+    assert signal.overlap is None
 
 
 # ---------------------------------------------------- stale contamination
@@ -259,18 +333,63 @@ def test_every_matched_category_from_the_corpus_is_present_in_every_mode(report)
 
 
 def test_no_match_incidents_are_excluded_from_hit_recall_mrr(report, documents):
-    unmatched_count = sum(1 for d in documents if d.doc_type == "alert" and not d.metadata.get("has_matching_runbook"))
     matched_count = sum(1 for d in documents if d.doc_type == "alert" and d.metadata.get("has_matching_runbook"))
 
     for mode_report in report.modes.values():
         assert mode_report.overall.n == matched_count
-        assert mode_report.no_match.unmatched.n == unmatched_count
 
 
-def test_no_match_analysis_has_a_score_for_every_unmatched_incident(report, documents):
-    unmatched_count = sum(1 for d in documents if d.doc_type == "alert" and not d.metadata.get("has_matching_runbook"))
+# ------------------------------------------------------------- abstention
 
-    assert report.modes["vector"].no_match.unmatched.n == unmatched_count > 0
+
+def test_abstention_counts_match_the_corpus(report, documents):
+    matched = sum(1 for d in documents if d.doc_type == "alert" and d.metadata.get("has_matching_runbook"))
+    unmatched = sum(1 for d in documents if d.doc_type == "alert" and not d.metadata.get("has_matching_runbook"))
+
+    for signal in (report.abstention.top1_cosine, report.abstention.gap):
+        assert signal.matched.n == matched
+        assert signal.unmatched.n == unmatched > 0
+
+
+def test_abstention_does_not_depend_on_which_modes_were_evaluated(retriever, documents):
+    """Guards against abstention being folded into the per-mode evaluation,
+    where it would pick up that mode's score scale. (That it is specifically
+    *vector cosine* -- not BM25 or the fused score -- is what
+    test_abstention_top1_is_the_raw_vector_cosine_of_the_best_runbook checks.)"""
+    only_keyword = evaluate_retrieval(retriever, documents, embedder_name="e", modes=["keyword"])
+    only_hybrid = evaluate_retrieval(retriever, documents, embedder_name="e", modes=["hybrid"])
+
+    assert only_keyword.abstention == only_hybrid.abstention
+
+
+def test_abstention_top1_is_the_raw_vector_cosine_of_the_best_runbook(retriever, documents):
+    alert = next(d for d in documents if d.doc_type == "alert" and d.metadata.get("has_matching_runbook"))
+    expected = retriever.search(alert.body, k=1, where={"doc_type": "runbook"}, mode="vector")[0].score
+
+    single = analyze_abstention(retriever, [alert])
+
+    assert single.top1_cosine.matched.mean == pytest.approx(expected)
+
+
+def test_abstention_gap_is_top1_minus_top2_and_never_negative(retriever, documents):
+    # Pick a case whose top two hits genuinely differ: on a tie the gap is 0
+    # either way round, so a flipped subtraction would go unnoticed.
+    for alert in (d for d in documents if d.doc_type == "alert" and d.metadata.get("has_matching_runbook")):
+        first, second = retriever.search(alert.body, k=2, where={"doc_type": "runbook"}, mode="vector")
+        if first.score - second.score > 0.01:
+            break
+    else:
+        pytest.fail("no alert with a distinguishable top-2 found")
+
+    single = analyze_abstention(retriever, [alert])
+
+    assert single.gap.matched.mean == pytest.approx(first.score - second.score)
+    assert single.gap.matched.mean > 0.0
+
+
+def test_abstention_cosine_stays_within_the_valid_cosine_range(report):
+    for stats in (report.abstention.top1_cosine.matched, report.abstention.top1_cosine.unmatched):
+        assert -1.0 <= stats.min <= stats.max <= 1.0
 
 
 # -------------------------------------------------------------- fusion comparison
@@ -305,12 +424,38 @@ def test_rendered_report_includes_every_mode_and_category(report):
         assert f"`{mode}`" in markdown
     for label in ("near-duplicate runbook pair", "vocabulary mismatch", "cascading failure", "baseline"):
         assert label in markdown
-    assert "No-match / abstention" in markdown
+    assert "Abstention analysis" in markdown
     assert "Weakest category" in markdown
     assert "Stale-runbook contamination" in markdown
     assert "Hybrid fusion" in markdown
     assert "Hit@1" in markdown
     assert "Precision@" not in markdown
+
+
+def test_report_has_one_abstention_section_not_one_per_mode(report):
+    markdown = render_markdown(report)
+
+    assert markdown.count("## Abstention analysis") == 1
+    assert "#### No-match" not in markdown
+
+
+def test_report_labels_scores_by_what_they_are_and_never_calls_bm25_or_fused_scores_similarity(report):
+    markdown = render_markdown(report)
+
+    assert "Top-1 similarity score" not in markdown
+    assert "mean cosine" in markdown
+    assert "mean cosine gap" in markdown
+    assert "raw vector cosine similarity" in markdown
+    assert "BM25" in markdown  # explains why it isn't used, rather than silently dropping it
+
+
+def test_report_reports_standard_deviation_and_auc_for_both_signals(report):
+    markdown = render_markdown(report)
+
+    assert markdown.count("std dev") == 2
+    assert markdown.count("AUC = ") == 2
+    assert "Signal 1: top-1 cosine similarity" in markdown
+    assert "Signal 2: gap between the top two hits" in markdown
 
 
 def test_report_is_deterministic_apart_from_the_timestamp(retriever, documents):

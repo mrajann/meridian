@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from meridian.evals.retrieval import BASELINE_CATEGORY, Metrics, ModeReport, RetrievalEvalReport
+from meridian.evals.retrieval import (
+    BASELINE_CATEGORY,
+    AbstentionAnalysis,
+    Metrics,
+    ModeReport,
+    RetrievalEvalReport,
+    SignalAnalysis,
+)
 
 _CATEGORY_LABEL = {
     BASELINE_CATEGORY: "baseline (no adversarial case)",
@@ -39,36 +46,6 @@ def _mode_section(report: ModeReport) -> str:
             f"(Hit@1={worst.hit_at_1:.3f}, n={worst.n}).",
         ]
 
-    lines += ["", "#### No-match / abstention analysis", ""]
-    matched, unmatched = report.no_match.matched, report.no_match.unmatched
-    if matched and unmatched:
-        lines += [
-            "Top-1 similarity score of the best runbook hit, matched incidents vs. incidents with no correct runbook:",
-            "",
-            "| Group | n | mean | median | min | max |",
-            "|---|---:|---:|---:|---:|---:|",
-            f"| has matching runbook | {matched.n} | {matched.mean:.3f} | {matched.median:.3f} | {matched.min:.3f} | {matched.max:.3f} |",
-            f"| **no** matching runbook | {unmatched.n} | {unmatched.mean:.3f} | {unmatched.median:.3f} | {unmatched.min:.3f} | {unmatched.max:.3f} |",
-            "",
-        ]
-        if report.no_match.separable:
-            lines.append(
-                f"**Separable**: every no-match top score ({unmatched.max:.3f}) is below every matched top "
-                f"score ({matched.min:.3f}). A fixed similarity threshold between them would let an agent "
-                "abstain correctly on every case here."
-            )
-        else:
-            overlap = report.no_match.overlap
-            lines.append(
-                f"**Not cleanly separable**: no-match top scores go as high as {unmatched.max:.3f}, above "
-                f"the lowest matched top score ({matched.min:.3f}) -- an overlap of {overlap:.3f}. A single "
-                "score threshold will misclassify some cases in that band either way; abstention needs "
-                "more than top-1 score alone (e.g. the score gap to the #2 hit, or an LLM judging the "
-                "retrieved runbook against the alert)."
-            )
-    else:
-        lines.append("(not enough matched or unmatched cases with scores to compare)")
-
     lines += ["", "#### Stale-runbook contamination", ""]
     sc = report.stale_contamination
     lines.append(
@@ -86,6 +63,75 @@ def _mode_section(report: ModeReport) -> str:
     return "\n".join(lines)
 
 
+def _stats_row(label: str, st) -> str:
+    return f"| {label} | {st.n} | {st.mean:.3f} | {st.std:.3f} | {st.median:.3f} | {st.min:.3f} | {st.max:.3f} |"
+
+
+def _signal_block(signal: SignalAnalysis, unit_label: str) -> list[str]:
+    lines = [
+        f"| Group | n | mean {unit_label} | std dev | median | min | max |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        _stats_row("has matching runbook", signal.matched),
+        _stats_row("**no** matching runbook", signal.unmatched),
+        "",
+    ]
+    if signal.separable:
+        lines.append(
+            f"**Separable**: every no-match value ({signal.unmatched.max:.3f}) is below every matched value "
+            f"({signal.matched.min:.3f}), so a threshold between them classifies every case correctly."
+        )
+    else:
+        lines.append(
+            f"**Not separable**: the two groups share a band of {signal.overlap:.3f} {unit_label} "
+            f"(no-match values reach {signal.unmatched.max:.3f}; matched values go as low as "
+            f"{signal.matched.min:.3f})."
+        )
+    t = signal.best_threshold
+    lines += [
+        "",
+        f"AUC = {signal.auc:.3f}: the chance a randomly chosen matched incident scores higher than a randomly "
+        "chosen no-match one (0.5 is a coin flip, 1.0 is perfect separation). Needs no threshold.",
+        "",
+        f"Best single threshold (answer if {unit_label} >= {t.threshold:.3f}, otherwise abstain): correctly "
+        f"abstains on {t.abstain_correctly:.0%} of the {signal.unmatched.n} no-match incidents, but also "
+        f"abstains on {t.abstain_wrongly:.0%} of the {signal.matched.n} incidents that do have a runbook "
+        f"(balanced accuracy {t.balanced_accuracy:.3f}). Chosen on these same cases, so this is optimistic.",
+    ]
+    return lines
+
+
+def _abstention_section(analysis: AbstentionAnalysis) -> str:
+    matched_n = analysis.top1_cosine.matched.n if analysis.top1_cosine.matched else 0
+    unmatched_n = analysis.top1_cosine.unmatched.n if analysis.top1_cosine.unmatched else 0
+    lines = [
+        "## Abstention analysis",
+        "",
+        "Could an agent tell \"I found nothing\" from \"I found it\" using only what retrieval returns? "
+        f"{unmatched_n} incidents have no correct runbook anywhere in the corpus; {matched_n} do. "
+        f"With only {unmatched_n} no-match cases, every figure below is a rough estimate.",
+        "",
+        "Both signals are computed from **raw vector cosine similarity**, regardless of retrieval mode "
+        "(cosine = 1 - Chroma cosine distance; range -1 to 1). It is the only absolute-scale score available: "
+        "keyword search returns raw BM25, which is unbounded and depends on query length and corpus statistics, "
+        "and hybrid `weighted_sum` returns a per-query min-max-normalized score, so a query's best hit lands near "
+        "the maximum however weak the match. Neither can be compared *across* queries, which is what a "
+        "threshold needs, so neither is used here.",
+        "",
+        "### Signal 1: top-1 cosine similarity",
+        "",
+        *_signal_block(analysis.top1_cosine, "cosine"),
+        "",
+        "### Signal 2: gap between the top two hits (top-1 cosine minus top-2 cosine)",
+        "",
+        "A weak lead could mean \"nothing distinctive found\" even when the absolute score looks fine.",
+        "",
+        *_signal_block(analysis.gap, "cosine gap"),
+    ]
+    if analysis.n_without_second_hit:
+        lines += ["", f"({analysis.n_without_second_hit} incidents retrieved fewer than two documents and are excluded from the gap signal.)"]
+    return "\n".join(lines)
+
+
 def render_markdown(report: RetrievalEvalReport) -> str:
     modes = list(report.modes.values())
     k = modes[0].k if modes else None
@@ -99,7 +145,7 @@ def render_markdown(report: RetrievalEvalReport) -> str:
         "(`correct_runbook`, `has_matching_runbook`, `adversarial_case`) -- see "
         "`src/meridian/corpus/adversarial.py` and `src/meridian/evals/retrieval.py`. "
         "Hit@1/recall/MRR are computed only over alerts that have a correct runbook; "
-        "alerts with none are covered by the no-match analysis in each mode's section instead. "
+        "alerts with none are covered by the abstention analysis instead. "
         "Hit@1 (not precision@k) is the top-of-ranking metric: with exactly one relevant document "
         "per query, precision@k is capped at 1/k regardless of retrieval quality, which makes every "
         "mode look like it's failing when the ceiling is the metric, not the retriever.",
@@ -119,6 +165,8 @@ def render_markdown(report: RetrievalEvalReport) -> str:
 
     for mode_report in modes:
         lines += ["", _mode_section(mode_report), ""]
+
+    lines += ["", _abstention_section(report.abstention), ""]
 
     if report.fusion_comparison:
         lines += [

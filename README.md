@@ -205,12 +205,27 @@ the aggregate hides exactly the cases that matter — see
   than retrieval alone (the dependency graph from increment 2, reasoned over
   by an agent).
 
-**No-match / abstention:** for alerts with no correct runbook, does the
-top-1 similarity score alone come out low enough to abstain on? Not cleanly —
-matched and unmatched top-1 scores overlap (vector mode), so a single fixed
-threshold would misclassify cases in that band either way. Abstention needs
-more than top-1 score (e.g. the gap to the #2 hit, or an LLM judging the
-retrieved runbook against the alert) — left for a later increment.
+**Abstention.** For alerts with no correct runbook, can an agent tell "I found
+nothing" from "I found it" using only what retrieval returns? Judged on **raw
+vector cosine similarity**, regardless of retrieval mode, because it is the
+only absolute-scale score available: BM25 is unbounded and depends on query
+length and corpus statistics, and the hybrid `weighted_sum` score is
+min-max-normalized per query, so its best hit lands near the maximum however
+weak the match (neither is comparable across queries, which a threshold
+needs). Two signals, each reported as matched-vs-unmatched mean/std dev, a
+threshold-free AUC, and the best single threshold:
+
+- **Top-1 cosine** — a weak signal, not a usable one. The groups overlap
+  (AUC ≈ 0.67); the best threshold abstains correctly on every no-match case
+  but also abstains on over half of the incidents that *do* have a runbook.
+- **Gap between the top two hits** — no better than a coin flip (AUC ≈ 0.52),
+  contrary to the hypothesis that a weak lead marks "nothing distinctive found".
+
+Only 15 incidents have no correct runbook, so these are rough estimates, and
+the best-threshold figures are chosen on the same cases they're scored on
+(optimistic). Abstention needs more than a score cutoff — e.g. an LLM judging
+the retrieved runbook against the alert — left for a later increment. Exact,
+regenerated figures are in `reports/retrieval_eval.md`.
 
 **Stale-runbook contamination:** stale runbooks are never the correct answer
 to anything, so the meaningful question is whether they leak into results for
