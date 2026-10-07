@@ -10,8 +10,8 @@ from meridian.oncall import Rotation
 from meridian.tools.context import ToolContext
 from meridian.tools.errors import ToolError
 from meridian.tools.registry import tool
+from meridian.tools.types import Message, TeamName
 
-TeamName = Annotated[str, Field(min_length=1, max_length=100)]
 Severity = Literal["SEV1", "SEV2", "SEV3", "SEV4"]
 
 
@@ -69,7 +69,7 @@ def page_oncall(
     ctx: ToolContext,
     team: TeamName,
     severity: Severity,
-    message: Annotated[str, Field(min_length=20, max_length=500)],
+    message: Message,
 ) -> dict:
     """Page a team's primary on-call about an incident. SIMULATED: the request is recorded and nothing is sent.
 

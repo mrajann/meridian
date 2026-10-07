@@ -65,3 +65,30 @@ def find_scenario(s_scenarios):
         raise LookupError(f"no scenario matches {attrs}")
 
     return find
+
+
+@pytest.fixture(scope="session")
+def valid_args():
+    """valid_args(scenario) -> {tool name: arguments for one plausible, valid
+    call}. Every registered tool must have an entry: tests that sweep the
+    registry fail loudly for a tool that doesn't, so a new tool cannot slip
+    past them by omission."""
+
+    def build(scenario):
+        """One plausible, valid call per tool for the given incident."""
+        root = scenario.root_cause_service if scenario else "checkout-api"
+        return {
+            "search_runbooks": {"query": "elevated error rate and latency", "k": 3},
+            "search_postmortems": {"query": "services erroring at once", "k": 3},
+            "find_similar_incidents": {"description": "error rate elevated on several services", "k": 3},
+            "get_service": {"name": root},
+            "get_dependencies": {"name": root, "depth": 2},
+            "get_dependents": {"name": root, "depth": 2},
+            "query_metrics": {"service": root, "metric": "error_rate", "window": "1h"},
+            "get_deploy_history": {"service": root, "window": "24h"},
+            "compute_error_budget": {"service": root},
+            "get_oncall": {"team": "data-oncall"},
+            "page_oncall": {"team": "data-oncall", "severity": "SEV2", "message": "synthetic test page for the registry tests"},
+        }
+
+    return build

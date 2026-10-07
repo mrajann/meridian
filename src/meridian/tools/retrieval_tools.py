@@ -19,6 +19,7 @@ from meridian.indexing.store import Hit, build_filter
 from meridian.retrieval import FUSION_DEPTH
 from meridian.tools.context import ToolContext
 from meridian.tools.registry import tool
+from meridian.tools.types import SearchText
 
 SCORE_GUIDE = {
     "cosine_similarity": (
@@ -92,7 +93,7 @@ def _search(ctx: ToolContext, query: str, k: int, doc_type: str | list[str]) -> 
 @tool
 def search_runbooks(
     ctx: ToolContext,
-    query: Annotated[str, Field(min_length=3, max_length=500)],
+    query: SearchText,
     k: Annotated[int, Field(ge=1, le=10)] = 5,
 ) -> dict:
     """Search the runbook library for documented procedures that address a symptom, failure mode, or alert.
@@ -131,7 +132,7 @@ def search_runbooks(
 @tool
 def search_postmortems(
     ctx: ToolContext,
-    query: Annotated[str, Field(min_length=3, max_length=500)],
+    query: SearchText,
     k: Annotated[int, Field(ge=1, le=10)] = 5,
 ) -> dict:
     """Search past incident postmortems for what went wrong before: root causes, timelines, and action items.
@@ -164,7 +165,7 @@ def search_postmortems(
 @tool
 def find_similar_incidents(
     ctx: ToolContext,
-    description: Annotated[str, Field(min_length=3, max_length=500)],
+    description: SearchText,
     k: Annotated[int, Field(ge=1, le=10)] = 5,
 ) -> dict:
     """Find past incidents that look like the one you are investigating, across both fired alerts and postmortems.

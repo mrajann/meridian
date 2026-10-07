@@ -11,14 +11,20 @@ from meridian.catalog import ServiceEntry
 from meridian.tools.context import ToolContext
 from meridian.tools.errors import ToolError
 from meridian.tools.registry import tool
-
-ServiceName = Annotated[str, Field(min_length=1, max_length=100)]
+from meridian.tools.types import ServiceName, normalize_identifier
 
 
 def require_service(ctx: ToolContext, name: str) -> ServiceEntry:
-    entry = ctx.catalog.get(name.strip().lower())
+    """The catalog entry for `name`, or a ToolError naming near matches.
+
+    Tool arguments typed ServiceName arrive already normalized, so this does
+    not need to be where case is fixed; it normalizes anyway so that a caller
+    holding a raw string (a test, another module) gets the same answer.
+    """
+    key = normalize_identifier(name)
+    entry = ctx.catalog.get(key)
     if entry is None:
-        close = difflib.get_close_matches(name.strip().lower(), ctx.catalog, n=4, cutoff=0.5)
+        close = difflib.get_close_matches(key, ctx.catalog, n=4, cutoff=0.5)
         hint = f" Did you mean: {', '.join(close)}?" if close else ""
         raise ToolError(
             f"No service named '{name}' in the current catalog.{hint} A name that is simply not in the catalog "
@@ -49,7 +55,7 @@ def get_service(ctx: ToolContext, name: ServiceName) -> dict:
     get_dependencies, which can walk several hops).
 
     Args:
-        name: Exact service name, lowercase with hyphens, e.g. "checkout-api" or "postgres-primary".
+        name: Service name, e.g. "checkout-api" or "postgres-primary".
 
     Returns:
         name, tier, owner, oncall_rotation (null for external), description, depends_on, depended_on_by,
@@ -73,7 +79,7 @@ def get_service(ctx: ToolContext, name: ServiceName) -> dict:
 
 
 def _walk(ctx: ToolContext, name: str, depth: int, direction: str) -> dict:
-    name = require_service(ctx, name).name
+    require_service(ctx, name)
     hops = (
         ctx.graph.dependencies_with_hops(name, depth)
         if direction == "dependencies"
@@ -109,7 +115,7 @@ def get_dependencies(
     get_dependents).
 
     Args:
-        name: Exact service name, e.g. "orders-service".
+        name: Service name, e.g. "orders-service".
         depth: How many hops to follow, 1 to 10. 1 is direct dependencies only.
 
     Returns:
@@ -135,7 +141,7 @@ def get_dependents(
     dependent means a service can be affected, not that it is: confirm with query_metrics.
 
     Args:
-        name: Exact service name, e.g. "postgres-primary".
+        name: Service name, e.g. "postgres-primary".
         depth: How many hops to follow, 1 to 10. 1 is direct dependents only; use 10 for the complete set.
 
     Returns:

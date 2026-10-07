@@ -292,6 +292,17 @@ problem in one message, so a bad call can be fixed in one retry. A tool can't
 be registered with a thin description or an undocumented parameter (checked at
 import), and tests assert the published schema and the runtime validator agree.
 
+**Service and team names are normalized by their type, not by each tool.**
+`ServiceName` / `TeamName` (`tools/types.py`) strip whitespace and fold case
+inside the one validation step every call passes through, so a tool body only
+ever sees the canonical form -- "Checkout-API" and " CHECKOUT-API " cannot
+reach tool code in any other spelling. Registration enforces it: every string
+parameter must declare its kind (`ServiceName`/`TeamName`, or a `Verbatim`
+type such as `SearchText`), a bare `service: str` fails at import with
+instructions, and a parameter named `service`/`services`/`team` can't be
+declared verbatim. Tests enumerate the live registry (including any future
+tool) and require mixed-case input to produce identical output.
+
 **The docstring is the prompt.** Each says what the tool is for, when *not* to
 use it, how to read the output, and the specific traps: a stale runbook
 references a service `get_service` can't find; a deploy before an incident is

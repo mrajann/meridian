@@ -6,6 +6,9 @@ Conventions a tool function follows (enforced when it is registered):
 - first parameter is `ctx` (the ToolContext); it is invisible to the model
 - every other parameter is type-annotated; constraints go in the annotation
   (`Annotated[int, Field(ge=1, le=20)]`, `Literal["a", "b"]`)
+- every string parameter declares its kind (meridian.tools.types): a catalog
+  identifier (ServiceName, TeamName -- normalized before the tool runs) or
+  verbatim text. A bare `str` is rejected at registration
 - the docstring is Google style: a summary, guidance paragraphs, an `Args:`
   entry for every parameter, and optionally a `Returns:` section
 
@@ -15,15 +18,18 @@ tool and the `Args:` entries to fill it in.
 
 from __future__ import annotations
 
+import collections.abc
 import inspect
 import re
+import types
 import typing
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from pydantic import TypeAdapter, ValidationError
 
 from meridian.tools.errors import ToolDefinitionError, ToolError
+from meridian.tools.types import ENTITY_PARAMETER_NAMES, CatalogEntity, Verbatim
 
 MIN_DESCRIPTION_CHARS = 200  # a one-liner is not enough for a model to choose well
 _SECTION_RE = re.compile(r"^(Args|Returns):\s*$")
@@ -109,6 +115,53 @@ class Param:
         return prop
 
 
+_CONTAINERS = (list, set, frozenset, tuple, collections.abc.Sequence, collections.abc.Set)
+
+
+def _string_leaves(annotation: Any, markers: tuple = ()) -> Iterator[tuple]:
+    """Yield, for every `str` the annotation can hold (through Annotated,
+    Optional/unions and list/set/tuple/dict), the Annotated metadata attached
+    to it. Metadata on a container does not describe its elements."""
+    origin = typing.get_origin(annotation)
+    if origin is typing.Annotated:
+        inner, *metadata = typing.get_args(annotation)
+        yield from _string_leaves(inner, markers + tuple(metadata))
+    elif origin is typing.Union or origin is types.UnionType:
+        for arg in typing.get_args(annotation):
+            if arg is not type(None):
+                yield from _string_leaves(arg, markers)
+    elif origin in _CONTAINERS:
+        for arg in typing.get_args(annotation):
+            if arg is not Ellipsis:
+                yield from _string_leaves(arg)
+    elif origin is dict:
+        for arg in typing.get_args(annotation)[1:]:
+            yield from _string_leaves(arg)
+    elif annotation is str:
+        yield markers
+
+
+def check_string_kinds(func_name: str, param: str, annotation: Any) -> None:
+    """Every string parameter must declare its kind, and a parameter named
+    like a catalog entity must be declared as one. This is what makes the
+    normalization in meridian.tools.types impossible to forget: the decision
+    cannot be skipped, only made wrongly and visibly."""
+    for markers in _string_leaves(annotation):
+        is_entity = any(isinstance(m, CatalogEntity) for m in markers)
+        if not (is_entity or any(isinstance(m, Verbatim) for m in markers)):
+            raise ToolDefinitionError(
+                f"{func_name}: parameter `{param}` is a plain string, so its kind is undeclared. Use ServiceName or "
+                f"TeamName (catalog identifiers: whitespace stripped and case folded before your code runs) or a "
+                f"Verbatim type such as SearchText, Message or Window (free text used as given) from "
+                f"meridian.tools.types."
+            )
+        if param in ENTITY_PARAMETER_NAMES and not is_entity:
+            raise ToolDefinitionError(
+                f"{func_name}: parameter `{param}` is named like a catalog identifier but declared Verbatim, so it "
+                f"would reach the tool in whatever case the model typed. Declare it ServiceName or TeamName."
+            )
+
+
 def extract_params(func: Callable, parsed: ParsedDocstring) -> dict[str, Param]:
     signature = inspect.signature(func)
     names = list(signature.parameters)
@@ -123,6 +176,7 @@ def extract_params(func: Callable, parsed: ParsedDocstring) -> dict[str, Param]:
             raise ToolDefinitionError(f"{func.__name__}: parameter `{name}` has no type annotation")
         if name not in parsed.params:
             raise ToolDefinitionError(f"{func.__name__}: parameter `{name}` is missing from the docstring's Args:")
+        check_string_kinds(func.__name__, name, hints[name])
         params[name] = Param(name, hints[name], p.default, parsed.params[name], TypeAdapter(hints[name]))
 
     undocumented_extra = set(parsed.params) - set(params)

@@ -8,9 +8,10 @@ from typing import Annotated, Any
 from pydantic import Field
 
 from meridian import slo
-from meridian.tools.catalog_tools import ServiceName, require_service
+from meridian.tools.catalog_tools import require_service
 from meridian.tools.context import ToolContext
 from meridian.tools.registry import tool
+from meridian.tools.types import ServiceName
 
 _SAMPLES_PER_WINDOW = 120
 
@@ -48,7 +49,7 @@ def compute_error_budget(
     how much reliability budget is being spent, not the cause.
 
     Args:
-        service: Exact service name, e.g. "checkout-api".
+        service: Service name, e.g. "checkout-api".
         slo_target: Availability SLO as a percentage, e.g. 99.9 for 99.9% (not 0.999). Omit to use the
             service's own target from the catalog.
         window_days: The SLO's rolling window in days, 7 to 90. Default 30.
@@ -60,7 +61,6 @@ def compute_error_budget(
         assessment.
     """
     entry = require_service(ctx, service)
-    service = entry.name
     target = entry.slo.availability if slo_target is None else slo_target
     budget = slo.error_budget_fraction(target)
     now, telemetry = ctx.now, ctx.telemetry

@@ -15,24 +15,6 @@ GROUND_TRUTH_KEYS = {
 }
 
 
-def valid_args(scenario):
-    """One plausible, valid call per tool for the given incident."""
-    root = scenario.root_cause_service if scenario else "checkout-api"
-    return {
-        "search_runbooks": {"query": "elevated error rate and latency", "k": 3},
-        "search_postmortems": {"query": "services erroring at once", "k": 3},
-        "find_similar_incidents": {"description": "error rate elevated on several services", "k": 3},
-        "get_service": {"name": root},
-        "get_dependencies": {"name": root, "depth": 2},
-        "get_dependents": {"name": root, "depth": 2},
-        "query_metrics": {"service": root, "metric": "error_rate", "window": "1h"},
-        "get_deploy_history": {"service": root, "window": "24h"},
-        "compute_error_budget": {"service": root},
-        "get_oncall": {"team": "data-oncall"},
-        "page_oncall": {"team": "data-oncall", "severity": "SEV2", "message": "synthetic test page for the registry tests"},
-    }
-
-
 def keys_anywhere(value):
     if isinstance(value, dict):
         for k, v in value.items():
@@ -163,14 +145,14 @@ def test_a_bug_in_a_tool_is_not_swallowed_as_a_model_error(s_ctx):
 
 
 @pytest.mark.parametrize("name", TOOL_ORDER)
-def test_every_tool_returns_a_json_serializable_dict(ctx_for, find_scenario, name):
+def test_every_tool_returns_a_json_serializable_dict(ctx_for, find_scenario, name, valid_args):
     sc = find_scenario()
     result = Toolset(ctx_for(sc.incident_id)).call(name, valid_args(sc)[name])
 
     assert isinstance(result, dict) and json.loads(json.dumps(result)) == result
 
 
-def test_no_ground_truth_leaks_out_of_any_tool_across_many_incidents(s_scenarios, ctx_for):
+def test_no_ground_truth_leaks_out_of_any_tool_across_many_incidents(s_scenarios, ctx_for, valid_args):
     checked = 0
     for incident_id in sorted(s_scenarios)[:: max(1, len(s_scenarios) // 12)]:
         sc = s_scenarios[incident_id]
@@ -183,7 +165,7 @@ def test_no_ground_truth_leaks_out_of_any_tool_across_many_incidents(s_scenarios
     assert checked >= 11 * 10
 
 
-def test_read_only_tools_never_touch_the_pager(ctx_for, find_scenario):
+def test_read_only_tools_never_touch_the_pager(ctx_for, find_scenario, valid_args):
     sc = find_scenario()
     ctx = ctx_for(sc.incident_id)
     toolset = Toolset(ctx)
@@ -195,7 +177,7 @@ def test_read_only_tools_never_touch_the_pager(ctx_for, find_scenario):
     assert ctx.pager.records == []
 
 
-def test_read_only_tools_are_repeatable(ctx_for, find_scenario):
+def test_read_only_tools_are_repeatable(ctx_for, find_scenario, valid_args):
     sc = find_scenario()
     toolset = Toolset(ctx_for(sc.incident_id))
 

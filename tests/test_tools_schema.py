@@ -14,6 +14,9 @@ from meridian.telemetry import METRICS
 from meridian.tools import TOOL_ORDER, ToolDefinitionError, ToolError, registered_tools
 from meridian.tools import registry as registry_module
 from meridian.tools.schema import build_schema, extract_params, parse_docstring, validate_arguments
+from meridian.tools.types import Verbatim
+
+Free = Annotated[str, Verbatim()]  # test fixtures are free text; the kind must still be declared
 
 SPEC_SIGNATURES = {  # meridian-spec.md section 6
     "search_runbooks": ["query", "k"],
@@ -32,7 +35,7 @@ SPEC_SIGNATURES = {  # meridian-spec.md section 6
 LONG_DESCRIPTION = "x" * 250
 
 
-def demo(ctx, query: Annotated[str, Field(min_length=1)], k: Annotated[int, Field(ge=1, le=20)] = 5,
+def demo(ctx, query: Annotated[str, Field(min_length=1), Verbatim()], k: Annotated[int, Field(ge=1, le=20)] = 5,
          kind: Literal["a", "b"] | None = None):
     """Search things.
 
@@ -154,7 +157,7 @@ def test_every_parameter_must_be_annotated():
 
 
 def test_every_parameter_must_be_documented():
-    def bad(ctx, query: str, k: int = 1):
+    def bad(ctx, query: Free, k: int = 1):
         """x
 
         Args:
@@ -166,7 +169,7 @@ def test_every_parameter_must_be_documented():
 
 
 def test_documenting_a_parameter_that_does_not_exist_is_rejected():
-    def bad(ctx, query: str):
+    def bad(ctx, query: Free):
         """x
 
         Args:
@@ -181,7 +184,7 @@ def test_documenting_a_parameter_that_does_not_exist_is_rejected():
 def test_registering_a_thin_description_is_rejected(monkeypatch):
     monkeypatch.setattr(registry_module, "_REGISTRY", {})
 
-    def thin(ctx, query: str):
+    def thin(ctx, query: Free):
         """Searches stuff.
 
         Args:
@@ -195,7 +198,7 @@ def test_registering_a_thin_description_is_rejected(monkeypatch):
 def test_registering_a_duplicate_name_is_rejected(monkeypatch):
     monkeypatch.setattr(registry_module, "_REGISTRY", {})
 
-    def dupe(ctx, query: str):
+    def dupe(ctx, query: Free):
         f'''{LONG_DESCRIPTION}
 
         Args:

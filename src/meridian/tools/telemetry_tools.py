@@ -11,12 +11,12 @@ from typing import Annotated, Any, Literal
 from pydantic import Field
 
 from meridian.telemetry.metrics import METRICS
-from meridian.tools.catalog_tools import ServiceName, require_service
+from meridian.tools.catalog_tools import require_service
 from meridian.tools.context import ToolContext
 from meridian.tools.errors import ToolError
 from meridian.tools.registry import tool
+from meridian.tools.types import ServiceName, Window
 
-WindowText = Annotated[str, Field(pattern=r"^\d+[mhd]$")]
 MetricName = Literal[
     "request_rate_rps",
     "error_rate",
@@ -106,7 +106,7 @@ def query_metrics(
     ctx: ToolContext,
     service: ServiceName,
     metric: MetricName,
-    window: WindowText = "1h",
+    window: Window = "1h",
 ) -> dict:
     """Read a service's recent metric time series, with the expected level and an anomaly check.
 
@@ -132,7 +132,7 @@ def query_metrics(
     compute_error_budget).
 
     Args:
-        service: Exact service name, e.g. "checkout-api".
+        service: Service name, e.g. "checkout-api".
         metric: Which metric to read; must be one this service has.
         window: How far back to look, ending now: a number and a unit, e.g. "15m", "1h", "6h", "24h", "7d".
             Between 5m and 7d. Default 1h.
@@ -142,7 +142,7 @@ def query_metrics(
         summary (latest, mean, min, max, peak_at, expected_mean, latest_vs_expected), and anomaly
         (detected, started_at, direction, peak_ratio_vs_expected, note).
     """
-    service = require_service(ctx, service).name
+    require_service(ctx, service)
     available = ctx.telemetry.available_metrics(service)
     if metric not in available:
         raise ToolError(f"'{service}' has no '{metric}' metric. Available for this service: {', '.join(available)}")
@@ -193,7 +193,7 @@ def query_metrics(
 def get_deploy_history(
     ctx: ToolContext,
     service: ServiceName,
-    window: WindowText = "24h",
+    window: Window = "24h",
 ) -> dict:
     """List the deploys of a service within a recent window, newest first.
 
@@ -213,7 +213,7 @@ def get_deploy_history(
     state (use query_metrics).
 
     Args:
-        service: Exact service name, e.g. "checkout-api".
+        service: Service name, e.g. "checkout-api".
         window: How far back to look, ending now: a number and a unit, e.g. "6h", "24h", "7d". Between 5m and
             30d. Default 24h.
 
@@ -222,7 +222,6 @@ def get_deploy_history(
         minutes_before_now, version, deployed_by, change_type, change_summary, status) newest first.
     """
     entry = require_service(ctx, service)
-    service = entry.name
     span = parse_window(window, minimum=timedelta(minutes=5), maximum=timedelta(days=30), label="deploy")
     end = ctx.now
     start = end - span
