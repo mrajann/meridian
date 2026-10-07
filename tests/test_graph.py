@@ -101,3 +101,36 @@ def test_circular_dependency_respects_depth(cyclic_catalog):
 
     assert graph.dependencies("a", depth=1) == {"b"}
     assert graph.dependencies("a", depth=2) == {"b", "c"}
+
+
+# --- hop distances ---
+
+
+def test_dependents_with_hops_reports_shortest_distance(real_catalog):
+    graph = DependencyGraph(real_catalog)
+
+    hops = graph.dependents_with_hops("postgres-primary")
+
+    assert hops["checkout-api"] == 1  # depends on postgres-primary directly
+    assert hops["web-frontend"] == 2  # via checkout-api
+    assert set(hops) == graph.dependents("postgres-primary")
+
+
+def test_hops_respect_the_depth_limit(real_catalog):
+    graph = DependencyGraph(real_catalog)
+
+    hops = graph.dependents_with_hops("postgres-primary", depth=1)
+
+    assert set(hops.values()) == {1}
+    assert "web-frontend" not in hops
+
+
+def test_a_service_reachable_by_two_paths_gets_its_shortest_distance(cyclic_catalog):
+    hops = DependencyGraph(cyclic_catalog).dependencies_with_hops("a")
+
+    assert hops == {"b": 1, "c": 2}  # never revisited, never "a" itself, despite the cycle
+
+
+def test_dependencies_with_hops_unknown_service_raises(real_catalog):
+    with pytest.raises(KeyError):
+        DependencyGraph(real_catalog).dependencies_with_hops("nope")
