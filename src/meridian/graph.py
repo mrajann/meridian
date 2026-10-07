@@ -23,28 +23,38 @@ class DependencyGraph:
         what cascade detection needs: postgres-primary's full blast radius,
         not just its direct callers.
         """
-        return self._traverse(name, depth, "depends_on")
+        return set(self._hops(name, depth, "depends_on"))
 
     def dependents(self, name: str, depth: int | None = None) -> set[str]:
         """Services that depend on `name`, transitively up to `depth` hops."""
-        return self._traverse(name, depth, "depended_on_by")
+        return set(self._hops(name, depth, "depended_on_by"))
 
-    def _traverse(self, name: str, depth: int | None, attr: str) -> set[str]:
+    def dependencies_with_hops(self, name: str, depth: int | None = None) -> dict[str, int]:
+        """Like dependencies(), but maps each service to its shortest hop
+        distance from `name` (1 = direct)."""
+        return self._hops(name, depth, "depends_on")
+
+    def dependents_with_hops(self, name: str, depth: int | None = None) -> dict[str, int]:
+        """Like dependents(), but maps each service to its shortest hop
+        distance from `name` (1 = direct)."""
+        return self._hops(name, depth, "depended_on_by")
+
+    def _hops(self, name: str, depth: int | None, attr: str) -> dict[str, int]:
         if name not in self._catalog:
             raise KeyError(f"unknown service: {name!r}")
 
-        visited: set[str] = set()
+        distance: dict[str, int] = {}
         frontier = {name}
         hops = 0
 
         while frontier and (depth is None or hops < depth):
+            hops += 1
             next_frontier: set[str] = set()
             for node in frontier:
                 for neighbor in getattr(self._catalog[node], attr):
-                    if neighbor not in visited and neighbor != name:
-                        visited.add(neighbor)
+                    if neighbor not in distance and neighbor != name:
+                        distance[neighbor] = hops
                         next_frontier.add(neighbor)
             frontier = next_frontier
-            hops += 1
 
-        return visited
+        return distance

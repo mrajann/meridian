@@ -256,3 +256,30 @@ def test_cli_builds_and_queries(tmp_path, monkeypatch, capsys):
 
     assert "indexed" in built_output and "chunks by type" in built_output
     assert query_output.count("runbook  tier=1") == 3
+
+
+# --------------------------------------------------- cosine_similarities
+
+
+def test_cosine_similarities_agree_with_the_scores_search_returns(built):
+    index = built[0]
+    hits = index.query("database connections maxed out", k=5)
+
+    cosines = index.cosine_similarities("database connections maxed out", [h.chunk_id for h in hits])
+
+    for hit in hits:
+        assert cosines[hit.chunk_id] == pytest.approx(hit.score, abs=1e-6)
+
+
+def test_cosine_similarities_scores_chunks_search_never_returned(built):
+    index = built[0]
+    returned = {h.chunk_id for h in index.query("database connections maxed out", k=3)}
+    other = next(h.chunk_id for h in index.query("sms delivery failing", k=50) if h.chunk_id not in returned)
+
+    cosines = index.cosine_similarities("database connections maxed out", [other])
+
+    assert -1.0 <= cosines[other] <= 1.0
+
+
+def test_cosine_similarities_of_no_chunks_is_empty(built):
+    assert built[0].cosine_similarities("anything", []) == {}

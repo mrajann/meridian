@@ -7,7 +7,7 @@ See [`meridian-spec.md`](meridian-spec.md) for the full technical spec, corpus
 design, agent design, and evaluation plan.
 
 Built incrementally — one branch and one PR per increment, listed in the spec's
-build table. Current: **increment 5** — retrieval layer and retrieval evaluation.
+build table. Current: **increment 6** — the tool layer.
 
 ## Setup
 
@@ -37,6 +37,10 @@ catalog/services/   41 hand-authored service catalog entries (YAML), one per ser
 data/corpus/     generated incident corpus (runbooks, postmortems, alerts, chats, catalog docs)
 data/chroma/     persisted vector index (gitignored; rebuilt by `python -m meridian.indexing build`)
 reports/         generated eval reports (committed -- see Retrieval evaluation below)
+src/meridian/tools/       the eleven agent tools + schema generation (see Tool layer)
+src/meridian/telemetry/   synthetic metrics and deploy records the tools query
+src/meridian/slo.py       error-budget / burn-rate math
+src/meridian/oncall.py    synthetic on-call rotations and the simulated pager
 tests/           pytest suite, mirrors src/meridian layout
 .env.example     documents every config value; copy to .env for local secrets
 pyproject.toml   package metadata, dependencies, pytest config
@@ -265,3 +269,78 @@ the index and runs `python -m meridian.evals retrieval` as its own CI step
 (hashing backend, no torch), uploading the report as a build artifact. The
 real semantic numbers in `reports/retrieval_eval.md` are generated locally
 with the real model and committed, the same pattern as the corpus itself.
+
+## Tool layer
+
+`meridian.tools` implements the eleven tools from the spec as plain Python
+functions: `search_runbooks`, `search_postmortems`, `find_similar_incidents`,
+`get_service`, `get_dependencies`, `get_dependents`, `query_metrics`,
+`get_deploy_history`, `compute_error_budget`, `get_oncall`, `page_oncall`.
+
+```python
+toolset = Toolset(build_context(catalog, retriever, scenario))
+toolset.schemas()                        # tools=[...] for the Anthropic Messages API
+toolset.run_tool_use(tool_use_block)     # -> tool_result block (is_error set on a ToolError)
+toolset.get_dependents("postgres-primary", depth=3)   # or call them as ordinary functions
+```
+
+**Schemas are generated, not written.** `tools/schema.py` builds each tool's
+JSON Schema from its signature (types, `Literal` enums, `Annotated[..,
+Field(ge=, le=)]` bounds, defaults) and takes descriptions from the docstring.
+The same machinery validates what the model sends back and reports *every*
+problem in one message, so a bad call can be fixed in one retry. A tool can't
+be registered with a thin description or an undocumented parameter (checked at
+import), and tests assert the published schema and the runtime validator agree.
+
+**Service and team names are normalized by their type, not by each tool.**
+`ServiceName` / `TeamName` (`tools/types.py`) strip whitespace and fold case
+inside the one validation step every call passes through, so a tool body only
+ever sees the canonical form -- "Checkout-API" and " CHECKOUT-API " cannot
+reach tool code in any other spelling. Registration enforces it: every string
+parameter must declare its kind (`ServiceName`/`TeamName`, or a `Verbatim`
+type such as `SearchText`), a bare `service: str` fails at import with
+instructions, and a parameter named `service`/`services`/`team` can't be
+declared verbatim. Tests enumerate the live registry (including any future
+tool) and require mixed-case input to produce identical output.
+
+**The docstring is the prompt.** Each says what the tool is for, when *not* to
+use it, how to read the output, and the specific traps: a stale runbook
+references a service `get_service` can't find; a deploy before an incident is
+a lead, not an answer; a quiet metric is not proof of health.
+
+**Retrieval tools return both scores, labelled.** The ranking is hybrid
+(`weighted_sum` 3:1), whose score is min-max normalized per query and so
+can't express match quality. Every result therefore also carries
+`cosine_similarity` (raw vector cosine, absolute scale), and the response
+carries `top1_cosine_similarity` and `gap_to_second_hit` -- the signals the
+abstention analysis measured. The cosine is computed from the stored
+embedding for every returned chunk, including ones only keyword search found.
+The investigated incident's own alert (and, for cascades, its postmortem) is
+excluded from retrieval so an agent can't look up its own answer.
+
+**Synthetic telemetry** (`meridian.telemetry`) is deterministic -- a pure
+function of (incident, service, metric, minute) -- and built from each corpus
+alert's labels. Each failure category has a metric signature (a connection
+pool saturating, a disk filling for 90 minutes *before* the incident, a memory
+leak ramping for two hours), and downstream services show weaker, lagged
+symptoms. Deliberately, `quality_degradation`, `stale_data` and `job_failure`
+on services with no queue metric leave every metric untouched, and an
+unrelated short latency blip appears on another service. Of 124 incidents, 29
+have a deploy that genuinely caused them and 46 have a coincidental deploy
+just before onset; causal and coincidental deploys draw changelog text from
+overlapping pools, so neither timing nor wording gives it away. None of that
+ground truth is ever returned by a tool (a test sweeps every tool across many
+incidents for leaked fields).
+
+**`compute_error_budget`** derives its burn-rate thresholds from what each
+tier is meant to catch -- "spend X% of the budget within W hours" gives
+`threshold = X * window_hours / W` -- rather than storing constants: a 30-day
+window yields 14.4 / 6 / 3 / 1 and a 28-day window 13.44 / 5.6 / 2.8 / 0.933.
+Each tier also requires a short window (1/12 of the long one) to be burning, so
+alerts reset quickly after a fix. This is the multi-window formulation from
+Google's SRE Workbook, which reproduces those figures; it was implemented from
+that definition, not ported from SLO Studio's source.
+
+**`page_oncall` is simulated**: it records the request in an in-memory `Pager`
+and sends nothing (a test fails if it opens a socket). A repeat for the same
+rotation and severity within 15 minutes is recorded but flagged as a duplicate.

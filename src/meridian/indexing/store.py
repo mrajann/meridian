@@ -45,6 +45,12 @@ class Hit:
         return self.metadata["doc_id"]
 
 
+def _unit(vector) -> list[float]:
+    values = [float(x) for x in vector]
+    norm = sum(x * x for x in values) ** 0.5
+    return [x / norm for x in values] if norm else values
+
+
 def _batches(items: list, size: int) -> Iterator[list]:
     for start in range(0, len(items), size):
         yield items[start : start + size]
@@ -132,6 +138,24 @@ class VectorIndex:
         what's in the vector index rather than re-deriving chunks separately."""
         result = self._collection().get(include=["documents", "metadatas"])
         return {"ids": result["ids"], "documents": result["documents"], "metadatas": result["metadatas"]}
+
+    def cosine_similarities(self, text: str, chunk_ids: list[str]) -> dict[str, float]:
+        """Raw cosine similarity between `text` and each named chunk, computed
+        from the stored embeddings rather than taken from a search result.
+
+        A hybrid search can return a chunk that only keyword search found, so
+        it never got a vector score; this gives every returned chunk the same
+        absolute-scale number regardless of how it was retrieved. Vectors are
+        re-normalized here rather than assumed unit-length.
+        """
+        if not chunk_ids:
+            return {}
+        stored = self._collection().get(ids=chunk_ids, include=["embeddings"])
+        query = _unit(self.embedder.embed([text])[0])
+        return {
+            chunk_id: sum(q * v for q, v in zip(query, _unit(embedding)))
+            for chunk_id, embedding in zip(stored["ids"], stored["embeddings"])
+        }
 
     def query(self, text: str, k: int = 5, where: dict[str, Any] | None = None) -> list[Hit]:
         collection = self._collection()
