@@ -39,6 +39,7 @@ data/chroma/     persisted vector index (gitignored; rebuilt by `python -m merid
 reports/         generated eval reports (committed -- see Retrieval evaluation below)
 src/meridian/tools/       the eleven agent tools + schema generation (see Tool layer)
 src/meridian/telemetry/   synthetic metrics and deploy records the tools query
+src/meridian/agent/       the single-agent loop, trace and report schema (see Single agent)
 src/meridian/slo.py       error-budget / burn-rate math
 src/meridian/oncall.py    synthetic on-call rotations and the simulated pager
 tests/           pytest suite, mirrors src/meridian layout
@@ -344,3 +345,51 @@ that definition, not ported from SLO Studio's source.
 **`page_oncall` is simulated**: it records the request in an in-memory `Pager`
 and sends nothing (a test fails if it opens a socket). A repeat for the same
 rotation and severity within 15 minutes is recorded but flagged as a duplicate.
+
+## Single agent
+
+`meridian.agent` is one agent with all eleven tools, driven by a hand-written
+loop (`loop.py`, no framework): send messages and tool schemas, run every
+`tool_use` block, send the `tool_result`s back, repeat until the model submits
+a report. It needs `ANTHROPIC_API_KEY` and a built index:
+
+```bash
+python -m meridian.agent list
+python -m meridian.agent run alert-cascade-feature-flags-9   # also writes reports/traces/<incident>-<run>.json
+```
+
+**Failure handling, each covered by a test:**
+
+| Situation | What the loop does |
+|---|---|
+| Several `tool_use` blocks in one response | Runs all, in order; returns all results in one user message |
+| Tool rejects the call (bad/missing/unknown arguments, non-object input, unknown tool) | `is_error` result with the message; the model retries |
+| Tool raises an unexpected exception | `is_error` result with only the exception type; full traceback kept in the trace |
+| Response cut off by `max_tokens` | Discards its tool calls (arguments may be truncated), asks for a shorter turn |
+| Model stops without submitting | One nudge, then fails with `no_report` |
+| Iteration cap (`--max-iterations`, default 12) | The last allowed call forces `submit_report` through `tool_choice`; if that still yields no valid report the run fails (`max_iterations` / `invalid_report`) |
+| Model API error | Run fails with `api_error`; the trace survives |
+
+**Output** is a pydantic `IncidentReport` submitted through a `submit_report`
+tool whose schema is generated from the model: severity (SEV1-4), affected
+services, outcome, root cause (service, category, confidence, citations),
+`matching_runbook`, recommended action. `outcome="insufficient_evidence"` is a
+first-class path: it must have `root_cause=null` and at least one stated
+evidence gap, so "unknown" and "diagnosed" cannot be blurred. `matching_runbook`
+is independent: a cause can be known with no runbook for it.
+
+**Citations are checked, not trusted.** The loop records every document, deploy,
+metric series and catalog entry the tools actually returned (`evidence.py`); a
+report citing anything else, or naming a service not in the catalog, is rejected
+and sent back to the model to fix.
+
+**Trace** (`trace.py`): one `RunTrace` per run, a `TurnTrace` per model call
+(agent, duration, input/output/cache tokens, stop reason, text, notes) and a
+`ToolCallTrace` per tool call (arguments exactly as sent, result exactly as
+shown, error kind, duration). It is plain JSON and carries `agent` on every turn
+so the same structure can describe several agents later. Its schema version,
+prompt hash and tool list are recorded so a behaviour change can be attributed.
+
+The model sits behind a small `ModelClient` interface; tests and CI drive the
+loop with `ScriptedClient` and make no network calls. **The loop has been
+exercised only against that scripted client so far, not against the live API.**

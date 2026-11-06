@@ -92,3 +92,31 @@ def valid_args():
         }
 
     return build
+
+
+# ------------------------------------------------------------ agent fixtures
+
+
+@pytest.fixture
+def agent_env(s_catalog, s_documents, s_scenarios, ctx_for):
+    """agent_env(incident_id=None) -> an investigation ready to run: the
+    alert, its scenario, a context with its own telemetry and pager, and a
+    Toolset. Defaults to a cascade incident (the interesting case)."""
+    from types import SimpleNamespace
+
+    from meridian.tools import Toolset
+
+    def make(incident_id: str | None = None):
+        incident_id = incident_id or sorted(i for i in s_scenarios if i.startswith("alert-cascade-"))[0]
+        ctx = ctx_for(incident_id)
+        alert = next(d for d in s_documents if d.doc_id == incident_id)
+        return SimpleNamespace(
+            incident_id=incident_id,
+            alert=alert,
+            scenario=s_scenarios[incident_id],
+            ctx=ctx,
+            toolset=Toolset(ctx),
+            catalog=s_catalog,
+        )
+
+    return make

@@ -27,3 +27,6 @@ data/chroma/
 .DS_Store
 .vscode/
 .idea/
+
+# Agent run traces (one JSON per run; regenerate by running the agent)
+reports/traces/
