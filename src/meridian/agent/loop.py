@@ -33,35 +33,33 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from meridian.agent.client import ModelClient, ModelResponse
 from meridian.agent.evidence import EvidenceLedger
 from meridian.agent.prompts import SYSTEM_PROMPT, system_prompt_sha
-from meridian.agent.report import (
-    SUBMIT_TOOL_NAME,
-    IncidentReport,
-    check_report,
-    format_validation_error,
-    submit_tool_schema,
-)
+from meridian.agent.output import OutputSpec
+from meridian.agent.report import INCIDENT_REPORT_SPEC, SUBMIT_TOOL_NAME, format_validation_error
 from meridian.agent.trace import RunTrace, ToolCallTrace, TurnTrace
 from meridian.catalog import ServiceEntry
 from meridian.tools.registry import Toolset
 
 PLACEHOLDER_TEXT = "(no output)"
-NUDGE = (
-    "You stopped without calling submit_report. Call it now with your findings. If the evidence does not "
-    "establish a cause, submit outcome=insufficient_evidence."
+NUDGE_TEMPLATE = (
+    "You stopped without calling {tool}. Call it now with your findings. If the evidence does not "
+    "establish a cause, submit {hint}."
 )
+DEFAULT_HINT = INCIDENT_REPORT_SPEC.fallback_hint
+NUDGE = NUDGE_TEMPLATE.format(tool=SUBMIT_TOOL_NAME, hint=DEFAULT_HINT)
 TRUNCATED = (
     "Your last response hit the output limit and any tool calls in it were discarded. Continue, more "
     "concisely, and call the tools again if you still need them."
 )
-FINAL_TURN = (
-    "This is your final turn. You must call submit_report now with the best report your evidence supports; "
-    "if it does not establish a cause, use outcome=insufficient_evidence."
+FINAL_TURN_TEMPLATE = (
+    "This is your final turn. You must call {tool} now with the best report your evidence supports; "
+    "if it does not establish a cause, use {hint}."
 )
+FINAL_TURN = FINAL_TURN_TEMPLATE.format(tool=SUBMIT_TOOL_NAME, hint=DEFAULT_HINT)
 
 
 @dataclass(frozen=True)
@@ -74,7 +72,7 @@ class AgentConfig:
 @dataclass
 class AgentRun:
     trace: RunTrace
-    report: IncidentReport | None = None
+    report: BaseModel | None = None  # validated output: an IncidentReport unless the loop was given another OutputSpec
 
     @property
     def ok(self) -> bool:
@@ -91,6 +89,7 @@ class AgentLoop:
         system_prompt: str = SYSTEM_PROMPT,
         config: AgentConfig = AgentConfig(),
         agent_name: str = "single-agent",
+        output: OutputSpec = INCIDENT_REPORT_SPEC,
         clock: Callable[[], float] = time.perf_counter,
         wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
@@ -104,7 +103,8 @@ class AgentLoop:
         self.agent_name = agent_name
         self._clock = clock
         self._wall_clock = wall_clock
-        self._tools = toolset.schemas() + [submit_tool_schema()]
+        self.output = output
+        self._tools = toolset.schemas() + [output.tool_schema()]
 
     # ------------------------------------------------------------------ run
 
@@ -144,9 +144,9 @@ class AgentLoop:
             trace.turns.append(turn)
             tool_choice = None
             if final_turn:
-                _append_user_text(messages, FINAL_TURN)
-                tool_choice = {"type": "tool", "name": SUBMIT_TOOL_NAME}
-                turn.forced_tool = SUBMIT_TOOL_NAME
+                _append_user_text(messages, FINAL_TURN_TEMPLATE.format(tool=self.output.tool_name, hint=self.output.fallback_hint))
+                tool_choice = {"type": "tool", "name": self.output.tool_name}
+                turn.forced_tool = self.output.tool_name
 
             called = self._clock()
             try:
@@ -187,7 +187,7 @@ class AgentLoop:
                 if nudges < cfg.max_nudges:
                     nudges += 1
                     turn.notes.append("nudged_to_submit")
-                    messages.append({"role": "user", "content": NUDGE})
+                    messages.append({"role": "user", "content": NUDGE_TEMPLATE.format(tool=self.output.tool_name, hint=self.output.fallback_hint)})
                     continue
                 trace.failure_reason = "no_report"
                 return
@@ -204,21 +204,21 @@ class AgentLoop:
 
     def _run_tool_uses(
         self, tool_uses: list[dict[str, Any]], turn: TurnTrace, ledger: EvidenceLedger
-    ) -> tuple[list[dict[str, Any]], IncidentReport | None, bool]:
+    ) -> tuple[list[dict[str, Any]], BaseModel | None, bool]:
         """Run one response's tool calls. Returns the tool_result blocks (in
         the model's order), the accepted report if one was submitted, and
         whether a submission was rejected."""
         results: list[dict[str, Any] | None] = [None] * len(tool_uses)
         submissions = []
         for position, block in enumerate(tool_uses):
-            if block.get("name") == SUBMIT_TOOL_NAME:
+            if block.get("name") == self.output.tool_name:
                 submissions.append((position, block))
             else:
                 results[position] = self._execute(block, turn, ledger)
 
         # Submissions are judged last so that evidence gathered in this very
         # response (a search run alongside the submit) counts as seen.
-        report: IncidentReport | None = None
+        report: BaseModel | None = None
         rejected = False
         for number, (position, block) in enumerate(submissions):
             result, accepted = self._submit(block, turn, ledger, duplicate=number > 0)
@@ -265,21 +265,21 @@ class AgentLoop:
 
     def _submit(
         self, block: dict[str, Any], turn: TurnTrace, ledger: EvidenceLedger, *, duplicate: bool
-    ) -> tuple[dict[str, Any], IncidentReport | None]:
+    ) -> tuple[dict[str, Any], BaseModel | None]:
         tool_use_id, arguments = block.get("id", ""), block.get("input")
         started = self._clock()
-        report: IncidentReport | None = None
+        report: BaseModel | None = None
         if duplicate:
-            result = _error_result(tool_use_id, "submit_report was already called in this response; call it once.")
+            result = _error_result(tool_use_id, f"{self.output.tool_name} was already called in this response; call it once.")
         elif not isinstance(arguments, dict):
-            result = _error_result(tool_use_id, "submit_report arguments must be a JSON object")
+            result = _error_result(tool_use_id, f"{self.output.tool_name} arguments must be a JSON object")
         else:
             try:
-                candidate = IncidentReport.model_validate(arguments)
+                candidate = self.output.model.model_validate(arguments)
             except ValidationError as exc:
                 result = _error_result(tool_use_id, f"report rejected: {format_validation_error(exc)}. Fix and resubmit.")
             else:
-                problems = check_report(candidate, ledger, self.catalog)
+                problems = self.output.check(candidate, ledger, self.catalog)
                 if problems:
                     result = _error_result(tool_use_id, "report rejected: " + "; ".join(problems) + ". Fix and resubmit.")
                 else:
@@ -293,7 +293,7 @@ class AgentLoop:
         turn.tool_calls.append(
             ToolCallTrace(
                 tool_use_id=tool_use_id,
-                name=SUBMIT_TOOL_NAME,
+                name=self.output.tool_name,
                 arguments=arguments,
                 result=result["content"],
                 is_error=result["is_error"],

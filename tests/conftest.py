@@ -120,3 +120,109 @@ def agent_env(s_catalog, s_documents, s_scenarios, ctx_for):
         )
 
     return make
+
+
+# ------------------------------------------------------ multi-agent fixtures
+
+
+@pytest.fixture
+def ma(agent_env, valid_args):
+    """Helpers for driving the four-agent pipeline with scripted models.
+
+    ma.client(env, **overrides) -> a RoutedClient where each agent follows a
+    default, valid script unless overridden with a list of steps (responses or
+    callables taking the request). ma.clients[agent] are the per-agent
+    ScriptedClients, whose .requests show exactly what each agent was sent.
+    """
+    import json
+    from types import SimpleNamespace
+
+    from meridian.agent.scripted import RoutedClient, ScriptedClient, reply, tool_use
+    from meridian.multiagent import prompts
+
+    def last_result(request, index=0):
+        return json.loads(request["messages"][-1]["content"][index]["content"])
+
+    def triage_report(env, **overrides):
+        root = env.scenario.root_cause_service
+        report = {
+            "severity": "SEV2",
+            "severity_rationale": "A tier-1 service is partly degraded for customers.",
+            "cascade": False,
+            "affected_services": [root],
+            "investigation_targets": [root],
+            "blast_radius": "The root service and the services that depend on it are degraded.",
+            "customer_impact": "Some customers see errors when browsing or buying.",
+            "evidence": [{"kind": "catalog", "ref": root, "supports": "the service was looked up in the catalog"}],
+        }
+        return {**report, **overrides}
+
+    def investigation_report(**overrides):
+        report = {
+            "outcome": "insufficient_evidence",
+            "evidence_gaps": ["No document describes this failure mode and telemetry is ambiguous."],
+            "recommended_action": "Ask the owning team to inspect the upstream service directly.",
+        }
+        return {**report, **overrides}
+
+    def escalation_report(team, **overrides):
+        report = {
+            "action": "notify_business_hours",
+            "team": team,
+            "reasoning": "Severity two, error budget healthy, no need to wake anyone.",
+            "budget_assessment": "Budget remaining is healthy.",
+        }
+        return {**report, **overrides}
+
+    def update_report(**overrides):
+        report = {
+            "headline": "Some customers are seeing errors",
+            "customer_impact": "Some customers may see errors while browsing or buying right now.",
+            "status": "investigating",
+            "confirmed": ["Some customers are seeing errors at the moment."],
+            "what_we_are_doing": "Our engineers are working to find the cause right now.",
+            "next_update_minutes": 30,
+        }
+        return {**report, **overrides}
+
+    def default_steps(env):
+        root = env.scenario.root_cause_service
+        return {
+            "triage": [
+                reply(tool_use("get_service", {"name": root})),
+                reply(tool_use("submit_triage", triage_report(env))),
+            ],
+            "investigator": [reply(tool_use("submit_investigation", investigation_report()))],
+            "escalation": [
+                reply(tool_use("get_service", {"name": root})),
+                lambda r: reply(tool_use("get_oncall", {"team": last_result(r)["owner"]})),
+                lambda r: reply(tool_use("submit_escalation", escalation_report(last_result(r)["team"]))),
+            ],
+            "comms": [reply(tool_use("submit_update", update_report()))],
+        }
+
+    prompt_of = {
+        "triage": prompts.TRIAGE_PROMPT,
+        "investigator": prompts.INVESTIGATOR_PROMPT,
+        "escalation": prompts.ESCALATION_PROMPT,
+        "comms": prompts.COMMS_PROMPT,
+    }
+
+    def client(env, **overrides):
+        steps = {**default_steps(env), **overrides}
+        clients = {name: ScriptedClient(*steps[name]) for name in prompt_of}
+        routed = RoutedClient({prompt_of[name]: clients[name] for name in prompt_of})
+        routed.clients = clients
+        return routed
+
+    return SimpleNamespace(
+        client=client,
+        default_steps=default_steps,
+        last_result=last_result,
+        triage_report=triage_report,
+        investigation_report=investigation_report,
+        escalation_report=escalation_report,
+        update_report=update_report,
+        prompt_of=prompt_of,
+        valid_args=valid_args,
+    )

@@ -20,6 +20,7 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from meridian.agent.evidence import EvidenceLedger
+from meridian.agent.output import OutputSpec, inline_schema
 from meridian.catalog import ServiceEntry
 from meridian.corpus.taxonomy import CATEGORY_INFO
 from meridian.tools.types import ServiceName
@@ -114,49 +115,41 @@ class IncidentReport(BaseModel):
 
     @model_validator(mode="after")
     def _outcome_matches_contents(self) -> IncidentReport:
-        if self.outcome == "root_cause_identified" and self.root_cause is None:
-            raise ValueError("outcome is root_cause_identified but root_cause is missing")
-        if self.outcome == "insufficient_evidence":
-            if self.root_cause is not None:
-                raise ValueError(
-                    "outcome is insufficient_evidence but root_cause is set; either you have a supported "
-                    "hypothesis (outcome=root_cause_identified) or you do not (root_cause=null)"
-                )
-            if not self.evidence_gaps:
-                raise ValueError("outcome is insufficient_evidence but evidence_gaps is empty; say what is missing")
+        check_outcome_consistency(self.outcome, self.root_cause, self.evidence_gaps)
         return self
 
 
+def check_outcome_consistency(outcome: str, root_cause: RootCause | None, evidence_gaps: list[str]) -> None:
+    """The rule that keeps "diagnosed" and "unknown" distinct, shared by every
+    output that carries an outcome."""
+    if outcome == "root_cause_identified" and root_cause is None:
+        raise ValueError("outcome is root_cause_identified but root_cause is missing")
+    if outcome == "insufficient_evidence":
+        if root_cause is not None:
+            raise ValueError(
+                "outcome is insufficient_evidence but root_cause is set; either you have a supported "
+                "hypothesis (outcome=root_cause_identified) or you do not (root_cause=null)"
+            )
+        if not evidence_gaps:
+            raise ValueError("outcome is insufficient_evidence but evidence_gaps is empty; say what is missing")
+
+
 def report_input_schema() -> dict[str, Any]:
-    """JSON Schema for the submit tool's input, with `$ref`s inlined so the
-    model sees one self-contained object."""
-    schema = IncidentReport.model_json_schema()
-    defs = schema.pop("$defs", {})
+    """JSON Schema for the submit tool's input (see output.inline_schema)."""
+    return inline_schema(IncidentReport)
 
-    def inline(node):
-        if isinstance(node, dict):
-            if "$ref" in node:
-                return inline(defs[node["$ref"].rsplit("/", 1)[-1]])
-            return {k: inline(v) for k, v in node.items() if k != "title"}
-        if isinstance(node, list):
-            return [inline(v) for v in node]
-        return node
 
-    return inline(schema)
+SUBMIT_DESCRIPTION = (
+    "Submit your final incident report. Call this exactly once, when you have enough to answer or have "
+    "established that you cannot. Ends the investigation. Every citation must refer to evidence returned "
+    "by your other tool calls; a report citing anything else is rejected and you must fix it. Use "
+    "outcome=insufficient_evidence, not a guess, when the evidence does not support a cause. Do not "
+    "call this to ask a question or to report progress."
+)
 
 
 def submit_tool_schema() -> dict[str, Any]:
-    return {
-        "name": SUBMIT_TOOL_NAME,
-        "description": (
-            "Submit your final incident report. Call this exactly once, when you have enough to answer or have "
-            "established that you cannot. Ends the investigation. Every citation must refer to evidence returned "
-            "by your other tool calls; a report citing anything else is rejected and you must fix it. Use "
-            "outcome=insufficient_evidence, not a guess, when the evidence does not support a cause. Do not "
-            "call this to ask a question or to report progress."
-        ),
-        "input_schema": report_input_schema(),
-    }
+    return {"name": SUBMIT_TOOL_NAME, "description": SUBMIT_DESCRIPTION, "input_schema": report_input_schema()}
 
 
 def format_validation_error(error: ValidationError, limit: int = 8) -> str:
@@ -168,30 +161,48 @@ def format_validation_error(error: ValidationError, limit: int = 8) -> str:
     return "; ".join(problems) + (f"; ...and {more} more" if more > 0 else "")
 
 
-def check_report(report: IncidentReport, ledger: EvidenceLedger, catalog: dict[str, ServiceEntry]) -> list[str]:
-    """Grounding problems with a structurally valid report (empty = grounded)."""
-    problems: list[str] = []
-
-    def unknown_service(name: str, where: str) -> None:
+def unknown_services(names: list[str], where: str, catalog: dict[str, ServiceEntry]) -> list[str]:
+    problems = []
+    for name in names:
         if name not in catalog:
             near = difflib.get_close_matches(name, catalog, n=3)
             hint = f" Did you mean {near}?" if near else ""
             problems.append(f"{where}: '{name}' is not a service in the catalog.{hint}")
-
-    for name in report.affected_services:
-        unknown_service(name, "affected_services")
-    if report.root_cause:
-        unknown_service(report.root_cause.service, "root_cause.service")
-        for citation in report.root_cause.citations:
-            if not ledger.has(citation.kind, citation.ref):
-                problems.append(
-                    f"citation {citation.kind} '{citation.ref}' was not returned by any tool call in this "
-                    f"investigation. Cite only evidence you retrieved, copied exactly."
-                )
-    if report.matching_runbook is not None:
-        doc_type = ledger.documents.get(report.matching_runbook)
-        if doc_type is None:
-            problems.append(f"matching_runbook '{report.matching_runbook}' was not returned by any search")
-        elif doc_type != "runbook":
-            problems.append(f"matching_runbook '{report.matching_runbook}' is a {doc_type}, not a runbook")
     return problems
+
+
+def ungrounded_citations(citations: list[Citation], ledger: EvidenceLedger) -> list[str]:
+    return [
+        f"citation {c.kind} '{c.ref}' was not returned by any tool call in this investigation. "
+        f"Cite only evidence you retrieved, copied exactly."
+        for c in citations
+        if not ledger.has(c.kind, c.ref)
+    ]
+
+
+def check_runbook(matching_runbook: str | None, ledger: EvidenceLedger) -> list[str]:
+    if matching_runbook is None:
+        return []
+    doc_type = ledger.documents.get(matching_runbook)
+    if doc_type is None:
+        return [f"matching_runbook '{matching_runbook}' was not returned by any search"]
+    if doc_type != "runbook":
+        return [f"matching_runbook '{matching_runbook}' is a {doc_type}, not a runbook"]
+    return []
+
+
+def check_report(report: IncidentReport, ledger: EvidenceLedger, catalog: dict[str, ServiceEntry]) -> list[str]:
+    """Grounding problems with a structurally valid report (empty = grounded)."""
+    problems = unknown_services(report.affected_services, "affected_services", catalog)
+    if report.root_cause:
+        problems += unknown_services([report.root_cause.service], "root_cause.service", catalog)
+        problems += ungrounded_citations(report.root_cause.citations, ledger)
+    return problems + check_runbook(report.matching_runbook, ledger)
+
+
+INCIDENT_REPORT_SPEC = OutputSpec(
+    tool_name=SUBMIT_TOOL_NAME,
+    description=SUBMIT_DESCRIPTION,
+    model=IncidentReport,
+    check=check_report,
+)

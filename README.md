@@ -40,6 +40,7 @@ reports/         generated eval reports (committed -- see Retrieval evaluation b
 src/meridian/tools/       the eleven agent tools + schema generation (see Tool layer)
 src/meridian/telemetry/   synthetic metrics and deploy records the tools query
 src/meridian/agent/       the single-agent loop, trace and report schema (see Single agent)
+src/meridian/multiagent/  the four-agent LangGraph pipeline, handoff schemas, comparison (see Multi-agent)
 src/meridian/slo.py       error-budget / burn-rate math
 src/meridian/oncall.py    synthetic on-call rotations and the simulated pager
 tests/           pytest suite, mirrors src/meridian layout
@@ -393,3 +394,59 @@ prompt hash and tool list are recorded so a behaviour change can be attributed.
 The model sits behind a small `ModelClient` interface; tests and CI drive the
 loop with `ScriptedClient` and make no network calls. **The loop has been
 exercised only against that scripted client so far, not against the live API.**
+
+## Multi-agent
+
+`meridian.multiagent` runs the same incident through four agents, orchestrated
+with LangGraph. Each agent is the increment 7 loop, unchanged in behaviour, run
+with its own tools, prompt and output schema:
+
+| Agent | Tools | Hands on |
+|---|---|---|
+| Triage | `get_service`, `get_dependencies`, `get_dependents`, `query_metrics` | `TriageHandoff`: severity, cascade, affected services, **investigation targets**, at-risk services, blast radius, plain-words customer impact |
+| Investigator | `search_runbooks`, `search_postmortems`, `find_similar_incidents`, `get_deploy_history`, `query_metrics` | `Investigation`: cause with citations or `insufficient_evidence`, matching runbook, action |
+| Escalation | `get_oncall`, `compute_error_budget`, `get_service`, `page_oncall` | `EscalationDecision`: `page_now` / `notify_business_hours` / `no_action`, team, page id |
+| Comms | none | `CustomerUpdate`: impact first, confirmed vs suspected, next update time |
+
+An agent cannot call a tool outside its list: the toolset rejects it as unknown
+(tested for all 31 agent/tool pairs that aren't allowed). The Investigator is
+shown Triage's `investigation_targets`, so on a cascade it is pointed at the
+shared upstream rather than the alerting services.
+
+**Handoffs are schemas, checked twice.** The loop validates each agent's output
+against its pydantic model and then runs a grounding check, sending problems back
+to the model: Triage's and the Investigator's citations must be things their own
+tools returned; the Escalation decision must match what the pager actually
+recorded (a page made must be reported, a page reported must exist, one page at
+most); the customer update may contain no service names, severity labels or
+document ids, and may not claim a cause the Investigator did not find. The
+payload recorded for each handoff is the exact JSON the next agent is shown.
+
+**Failure policy.** Triage fails: the run ends. Investigator fails: a
+system-written `insufficient_evidence` investigation (flagged `system_fallback`)
+goes on, so a SEV1 still gets paged on severity alone. Escalation or Comms fails:
+a `partial` packet, and Comms still runs if only Escalation failed.
+
+**Trace.** A `PipelineTrace` holds one `RunTrace` per agent (its own tool list,
+turns, calls, tokens) plus a `HandoffTrace` for every data flow (from, to, schema,
+source, valid, payload) and the graph path. It exposes the same totals as a
+single-agent `RunTrace`.
+
+**Comparing the two.** The increment 7 agent is untouched and still the default:
+
+```bash
+python -m meridian.agent run <incident>                       # single agent
+python -m meridian.agent run <incident> --architecture multi  # four agents
+python -m meridian.agent compare --sample 5                   # both, same incidents -> reports/architecture_comparison.json
+```
+
+Both produce a `RunSummary` with the same fields (severity, root cause, outcome,
+matching runbook, pages made, model calls, tokens, latency) and a quick score
+against the synthetic ground truth. That score is scaffolding for increment 9's
+eval harness, not a replacement for it.
+
+**Caveats.** Like the single agent, this has run only against a scripted model,
+never the live API. The orchestration is a straight line with one conditional
+edge (Triage failure); each agent needs the previous one's output, so LangGraph
+adds structure here more than parallelism. The no-jargon check catches exact
+identifiers only, not paraphrases such as "checkout api".

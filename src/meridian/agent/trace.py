@@ -97,3 +97,70 @@ class RunTrace(BaseModel):
 
     def calls(self, name: str | None = None) -> list[ToolCallTrace]:
         return [c for t in self.turns for c in t.tool_calls if name is None or c.name == name]
+
+
+# ----------------------------------------------------------- multi-agent runs
+#
+# A multi-agent run is several RunTraces (one per agent, each with its own
+# tool list, turns and tool calls, exactly as above) joined by HandoffTraces:
+# what each agent passed on, to whom, validated against which schema.
+
+HandoffSource = Literal["agent", "system_fallback"]
+
+
+class HandoffTrace(BaseModel):
+    from_agent: str
+    to_agent: str  # "output" for the final packet
+    schema_name: str
+    source: HandoffSource  # "system_fallback": the pipeline wrote it because the agent failed
+    valid: bool
+    payload: dict[str, Any] | None  # exactly the JSON the receiving agent is shown
+    error: str | None = None
+
+
+class PipelineTrace(BaseModel):
+    schema_version: int = TRACE_SCHEMA_VERSION
+    run_id: str
+    architecture: Literal["multi-agent"] = "multi-agent"
+    incident_id: str | None
+    model: str
+    started_at: datetime
+    duration_ms: float = 0.0
+    status: Literal["completed", "partial", "failed"] = "failed"
+    path: list[str] = Field(default_factory=list)  # graph nodes in the order they ran
+    failures: list[str] = Field(default_factory=list)  # "agent: reason"
+    agents: list[RunTrace] = Field(default_factory=list)
+    handoffs: list[HandoffTrace] = Field(default_factory=list)
+
+    # The same totals a single-agent RunTrace exposes, so the two
+    # architectures are compared on identical fields.
+    @computed_field
+    @property
+    def input_tokens(self) -> int:
+        return sum(a.input_tokens for a in self.agents)
+
+    @computed_field
+    @property
+    def output_tokens(self) -> int:
+        return sum(a.output_tokens for a in self.agents)
+
+    @computed_field
+    @property
+    def model_calls(self) -> int:
+        return sum(a.model_calls for a in self.agents)
+
+    @computed_field
+    @property
+    def tool_calls(self) -> int:
+        return sum(a.tool_calls for a in self.agents)
+
+    @computed_field
+    @property
+    def tool_errors(self) -> int:
+        return sum(a.tool_errors for a in self.agents)
+
+    def agent(self, name: str) -> RunTrace | None:
+        return next((a for a in self.agents if a.agent == name), None)
+
+    def calls(self, name: str | None = None) -> list[ToolCallTrace]:
+        return [c for a in self.agents for c in a.calls(name)]

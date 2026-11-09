@@ -19,6 +19,9 @@ class EvidenceLedger:
         self.deploys: set[str] = set()
         self.metrics: set[str] = set()  # "service/metric"
         self.services: set[str] = set()  # catalog entries the agent looked up
+        self.pages: dict[str, str] = {}  # page_id -> team, for pages actually recorded
+        self.oncall_teams: set[str] = set()  # teams whose on-call the agent looked up
+        self.budgets: set[str] = set()  # services whose error budget the agent computed
 
     def record(self, tool_name: str, arguments: Any, result: dict[str, Any]) -> None:
         """Call only for successful results; a failed call produced no evidence."""
@@ -29,6 +32,14 @@ class EvidenceLedger:
                     self.documents[row["doc_id"]] = row.get("doc_type", "")
         elif tool_name == "get_deploy_history":
             self.deploys.update(d["deploy_id"] for d in result.get("deploys", []) if "deploy_id" in d)
+        elif tool_name == "page_oncall":
+            if "page_id" in result:
+                self.pages[result["page_id"]] = result.get("team", "")
+        elif tool_name == "get_oncall":
+            self.oncall_teams.update(v for v in (result.get("team"), result.get("rotation")) if v)
+        elif tool_name == "compute_error_budget":
+            if result.get("service"):
+                self.budgets.add(result["service"])
         elif tool_name == "query_metrics":
             self.metrics.add(f"{result.get('service')}/{result.get('metric')}")
         elif tool_name in {"get_service", "get_dependencies", "get_dependents"}:
