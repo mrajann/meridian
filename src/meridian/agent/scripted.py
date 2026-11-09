@@ -50,3 +50,21 @@ class ScriptedClient:
             raise AssertionError(f"scripted client ran out of responses (request #{len(self.requests)})")
         step = self._script[len(self.requests) - 1]
         return step(request) if callable(step) else step
+
+
+class RoutedClient:
+    """One client for several agents, each with its own script, chosen by the
+    system prompt of the request. Lets a whole multi-agent pipeline run with no
+    model: give each agent's prompt its own ScriptedClient."""
+
+    model = "scripted"
+
+    def __init__(self, routes: dict[str, ScriptedClient]) -> None:
+        self.routes = routes
+
+    def create(self, *, system, messages, tools, max_tokens, tool_choice=None) -> ModelResponse:
+        if system not in self.routes:
+            raise AssertionError("no scripted route for this system prompt")
+        return self.routes[system].create(
+            system=system, messages=messages, tools=tools, max_tokens=max_tokens, tool_choice=tool_choice
+        )

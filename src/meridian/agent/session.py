@@ -27,6 +27,11 @@ class IncidentSession:
     def toolset(self) -> Toolset:
         return Toolset(self.ctx)
 
+    def fresh(self) -> "IncidentSession":
+        """The same incident with a new pager and telemetry, so a second run
+        never sees the first run's pages."""
+        return IncidentSession(self.alert, self.scenario, self.ctx.with_scenario(self.scenario), self.catalog)
+
 
 def open_incidents(settings: Settings) -> dict[str, "IncidentSession"]:
     """Every alert in the on-disk corpus as a ready session. Each session has
